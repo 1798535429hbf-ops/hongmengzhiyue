@@ -1,0 +1,90 @@
+### Health
+GET http://localhost:8080/api/health
+
+### 图书搜索
+GET http://localhost:8080/api/books/search?keyword=人工智能&tag=入门&page=0&size=10
+
+### 图书详情
+GET http://localhost:8080/api/books/1
+
+### 用户画像
+GET http://localhost:8080/api/users/profile?userId=10086
+
+### 保存画像
+POST http://localhost:8080/api/users/profile
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "name": "测试同学",
+  "major": "计算机科学",
+  "grade": "大二",
+  "interests": "人工智能,算法,英语备考",
+  "goal": "课程拓展与竞赛入门",
+  "budget": 80,
+  "channels": "library,jd,dangdang,second_hand"
+}
+
+### AI 推荐
+POST http://localhost:8080/api/ai/recommend
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "query": "我想看适合零基础的人工智能入门书"
+}
+
+### AI 伴读
+POST http://localhost:8080/api/ai/chat
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "book_id": 1,
+  "question": "这本书里智能体是什么意思？"
+}
+
+### 保存笔记
+POST http://localhost:8080/api/notes
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "book_id": 1,
+  "content": "智能体是在环境中感知并行动的系统。",
+  "type": "ai_answer"
+}
+
+### 创建计划
+POST http://localhost:8080/api/plans
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "book_id": 1,
+  "target_days": 14
+}
+
+### 电商/馆藏聚合
+POST http://localhost:8080/api/commerce/search
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "book_id": 1,
+  "isbn": "9787111649312",
+  "channels": ["library", "jd", "dangdang", "second_hand"]
+}
+
+### 购买/借阅确认
+POST http://localhost:8080/api/purchase/confirm
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "book_id": 1,
+  "platform": "library",
+  "action": "reserve",
+  "amount": 0,
+  "confirmed": true
+}

@@ -1,0 +1,10 @@
+{
+  "modelVersion": "6.0.1",
+  "name": "HongmengZhiYue",
+  "version": "1.0.0",
+  "description": "鸿蒙智阅 HarmonyOS client",
+  "main": "",
+  "author": "Hakimi",
+  "license": "MIT",
+  "dependencies": {}
+}

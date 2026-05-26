@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "鸿蒙智阅"
+    },
+    {
+      "name": "module_desc",
+      "value": "鸿蒙智阅主模块"
+    },
+    {
+      "name": "entry_desc",
+      "value": "鸿蒙智阅入口"
+    }
+  ]
+}
