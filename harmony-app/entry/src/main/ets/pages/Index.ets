@@ -1,1061 +1,2518 @@
-import {
-  ApiClient,
-  ChatResult,
-  CommerceBundle,
-  RecommendResult,
-} from '../common/ApiClient';
-import {
-  Book,
-  CommerceResult,
-  NoteItem,
-  PlanItem,
-  ProfileBundle,
-  RecommendationBook,
-  SourceRef,
-  UserProfile,
-  emptyBook,
-  emptyProfile,
-} from '../common/Models';
+import { ApiClient } from '../common/ApiClient';
+import { PlanItem } from '../common/Models';
+import { openBookDetail, openReader, openSearch, openShelfManage } from '../common/Navigation';
+import { buildContinueItems as createContinueItems, buildHistoryItems as createHistoryItems, formatReadingDuration } from '../common/ShelfPresentation';
+import { ShelfHomePanel } from '../common/ShelfHomePanel';
+import { LocalShelfBook, RemoteShelfSession, ShelfStore, ShelfStoreState } from '../common/ShelfStore';
+import { Theme } from '../common/Theme';
+import { common } from '@kit.AbilityKit';
+import cameraPicker from '@ohos.multimedia.cameraPicker';
+import { picker } from '@kit.CoreFileKit';
+import camera from '@ohos.multimedia.camera';
 
 const USER_ID: number = 10086;
+
+interface ShelfBook {
+  id: number;
+  title: string;
+  author: string;
+  tag: string;
+  progress: number;
+  accent: string;
+  lastRead: string;
+  coverTone: string;
+}
+
+interface StoreBook {
+  id: number;
+  title: string;
+  author: string;
+  score: string;
+  quote: string;
+  tags?: string[];
+  coverTone: string;
+}
+
+interface CategorySubject {
+  title: string;
+  coverTone: string;
+}
+
+interface QuickAction {
+  id: number;
+  label: string;
+  icon: Resource;
+}
+
+interface DiscoverList {
+  id: number;
+  title: string;
+  count: string;
+  saved: string;
+  coverTone: string;
+}
+
+interface ProfileService {
+  title: string;
+  subtitle: string;
+  icon: Resource;
+}
+
+interface ProfileTool {
+  title: string;
+  icon: Resource;
+}
+
+type ShelfTabMode = 'continue' | 'history';
+
+interface ShelfCardItem {
+  key: string;
+  sourceType: 'remote' | 'local';
+  title: string;
+  author: string;
+  tag: string;
+  progress: number;
+  progressText: string;
+  accent: string;
+  lastRead: string;
+  coverTone: string;
+  updatedAt: string;
+  actionLabel: string;
+  manageLabel: string;
+  remoteBookId?: number;
+  chapterId?: string;
+  localBookKey?: string;
+  openCount?: number;
+  inShelf?: boolean;
+  downloaded?: boolean;
+  pinned?: boolean;
+}
+
+const SHELF_BOOKS: ShelfBook[] = [
+  {
+    id: 1,
+    title: '三体全集（全3册）',
+    author: '刘慈欣',
+    tag: '科幻',
+    progress: 62,
+    accent: '#3B6CFF',
+    lastRead: '上次阅读：第三部 死神永生 第十二章',
+    coverTone: '#E8EEFF',
+  },
+  {
+    id: 2,
+    title: '活着',
+    author: '余华',
+    tag: '文学',
+    progress: 35,
+    accent: '#8B63FF',
+    lastRead: '上次阅读：第一部 福贵 第五章',
+    coverTone: '#F0F4FF',
+  },
+  {
+    id: 3,
+    title: '云边有个小卖部',
+    author: '张嘉佳',
+    tag: '小说',
+    progress: 18,
+    accent: '#FF8C2A',
+    lastRead: '上次阅读：第二章 云边镇',
+    coverTone: '#FFF2E8',
+  },
+  {
+    id: 4,
+    title: '追风筝的人',
+    author: '卡勒德·胡赛尼',
+    tag: '文学',
+    progress: 9,
+    accent: '#3F72FF',
+    lastRead: '上次阅读：第一部 第三章',
+    coverTone: '#EAF0FF',
+  },
+  {
+    id: 5,
+    title: '明朝那些事儿（全集）',
+    author: '当年明月',
+    tag: '历史',
+    progress: 12,
+    accent: '#FF8425',
+    lastRead: '上次阅读：第一卷 第六章',
+    coverTone: '#FFF1DE',
+  },
+  {
+    id: 6,
+    title: '人类简史：从动物到上帝',
+    author: '尤瓦尔·赫拉利',
+    tag: '历史',
+    progress: 8,
+    accent: '#FF5B58',
+    lastRead: '上次阅读：第二章 认知革命',
+    coverTone: '#F5F0E8',
+  },
+];
+
+const STORE_BOOKS: StoreBook[] = [
+  {
+    id: 1,
+    title: '余华作品集',
+    author: '余华',
+    score: '9.6分',
+    quote: '“我写这本书，不是为了控诉黑暗，而是为了，看见光明”',
+    coverTone: '#F7EFE3',
+  },
+  {
+    id: 2,
+    title: '活着',
+    author: '余华',
+    score: '9.8分',
+    quote: '人是为了活着本身而活着的，而不是为了活着之外的任何事物。',
+    coverTone: '#EEF2FF',
+  },
+  {
+    id: 3,
+    title: '三体全集（全3册）',
+    author: '刘慈欣',
+    score: '9.1分',
+    quote: '宇宙辽阔而生命短暂。',
+    tags: ['科幻', '宇宙', '文明'],
+    coverTone: '#E7EEFF',
+  },
+];
+
+const CATEGORY_SIDE_MENU: string[] = [
+  '全部分类',
+  '人气榜',
+  '畅销榜',
+  '新书榜',
+  '完结榜',
+  '收藏榜',
+  '推荐榜',
+];
+
+const CATEGORY_TOP_FILTERS: string[] = ['男生', '女生', '出版', '漫画'];
+
+const CATEGORY_SUBJECT_ROWS: CategorySubject[][] = [
+  [
+    { title: '玄幻', coverTone: '#E9F0FF' },
+    { title: '奇幻', coverTone: '#EEF4FF' },
+  ],
+  [
+    { title: '武侠', coverTone: '#F8F0E6' },
+    { title: '仙侠', coverTone: '#EEF6FF' },
+  ],
+  [
+    { title: '都市', coverTone: '#EDF3FF' },
+    { title: '现实', coverTone: '#FFF3EC' },
+  ],
+  [
+    { title: '历史', coverTone: '#FFF4E8' },
+    { title: '军事', coverTone: '#F2F6FF' },
+  ],
+  [
+    { title: '游戏', coverTone: '#E9F9EF' },
+    { title: '体育', coverTone: '#FFF2E6' },
+  ],
+  [
+    { title: '科幻', coverTone: '#EAF0FF' },
+    { title: '悬疑', coverTone: '#EEF3FF' },
+  ],
+  [
+    { title: '轻小说', coverTone: '#FFF4F0' },
+    { title: '短篇', coverTone: '#F3F6FF' },
+  ],
+  [
+    { title: '二次元', coverTone: '#EEF8FF' },
+    { title: '其他', coverTone: '#F6F7FB' },
+  ],
+];
+
+const CATEGORY_STYLE_TAGS: string[] = [
+  '热血',
+  '爽文',
+  '脑洞',
+  '无敌流',
+  '扮猪吃虎',
+  '升级流',
+  '穿越',
+  '重生',
+  '系统',
+  '搞笑',
+  '职场',
+  '末世',
+];
+
+const CATEGORY_PLOT_TAGS: string[] = [
+  '东方玄幻',
+  '异世大陆',
+  '王朝争霸',
+  '架空历史',
+  '高武世界',
+  '都市异能',
+  '娱乐明星',
+  '商战职场',
+  '悬疑推理',
+  '未来世界',
+  '星际文明',
+  '灵异神怪',
+];
+
+const DISCOVER_QUICK_ACTIONS: QuickAction[] = [
+  { id: 1, label: '书单', icon: $r('app.media.discover_quick_books') },
+  { id: 2, label: '榜单', icon: $r('app.media.discover_quick_rank') },
+  { id: 3, label: '主题', icon: $r('app.media.discover_quick_theme') },
+  { id: 4, label: '活动', icon: $r('app.media.discover_quick_activity') },
+  { id: 5, label: '听书', icon: $r('app.media.discover_quick_audio') },
+];
+
+const DISCOVER_LISTS: DiscoverList[] = [
+  {
+    id: 1,
+    title: '豆瓣高分书单',
+    count: '10本书',
+    saved: '392.4万人收藏',
+    coverTone: '#EEF3FF',
+  },
+  {
+    id: 2,
+    title: '一生必读的经典好书',
+    count: '20本书',
+    saved: '268.7万人收藏',
+    coverTone: '#FFF2E6',
+  },
+  {
+    id: 3,
+    title: '科幻迷必看的神作',
+    count: '15本书',
+    saved: '186.8万人收藏',
+    coverTone: '#E8EEFF',
+  },
+];
+
+const PROFILE_SERVICE_ROWS: ProfileService[][] = [
+  [
+    {
+      title: '画像中心',
+      subtitle: '编辑兴趣与渠道偏好',
+      icon: $r('app.media.profile_user'),
+    },
+    {
+      title: '活动中心',
+      subtitle: '校园阅读活动进行中',
+      icon: $r('app.media.profile_gift'),
+    },
+  ],
+  [
+    {
+      title: '阅读计划',
+      subtitle: '管理伴读节奏与进度',
+      icon: $r('app.media.profile_calendar'),
+    },
+    {
+      title: '问答记录',
+      subtitle: '查看 AI 伴读历史',
+      icon: $r('app.media.profile_chat'),
+    },
+  ],
+  [
+    {
+      title: '我的笔记',
+      subtitle: '摘录与灵感随时回看',
+      icon: $r('app.media.profile_note'),
+    },
+    {
+      title: '浏览记录',
+      subtitle: '保留最近访问轨迹',
+      icon: $r('app.media.profile_clock'),
+    },
+  ],
+];
+
+const PROFILE_TOOLS: ProfileTool[] = [
+  { title: '收藏夹', icon: $r('app.media.profile_star') },
+  { title: '阅读计划', icon: $r('app.media.profile_calendar') },
+  { title: '阅读画像', icon: $r('app.media.profile_user') },
+  { title: '成长勋章', icon: $r('app.media.profile_document') },
+  { title: '渠道偏好', icon: $r('app.media.profile_download') },
+  { title: '浏览记录', icon: $r('app.media.profile_clock') },
+  { title: '关注作者', icon: $r('app.media.profile_user_plus') },
+  { title: '字体设置', icon: $r('app.media.profile_font') },
+];
 
 @Entry
 @Component
 struct Index {
   @State activeTab: number = 0;
-  @State query: string = '我想看适合零基础的人工智能入门书';
-  @State keyword: string = '';
-  @State tag: string = '';
-  @State books: Book[] = [];
-  @State recommendations: RecommendationBook[] = [];
-  @State recommendReason: string = '';
-  @State sources: SourceRef[] = [];
-  @State plans: PlanItem[] = [];
-  @State notes: NoteItem[] = [];
-  @State favorites: Book[] = [];
-  @State profile: UserProfile = emptyProfile();
-  @State selectedBook: Book = emptyBook();
-  @State showDetail: boolean = false;
-  @State showChat: boolean = false;
-  @State showCommerce: boolean = false;
-  @State chatQuestion: string = '这本书适合我从哪一章开始读？';
-  @State chatAnswer: string = '';
-  @State commerceResults: CommerceResult[] = [];
-  @State busyText: string = '';
-  @State errorText: string = '';
-  private scroller: Scroller = new Scroller();
+  @State pageWidth: number = 390;
+  @State shelfRefreshSeed: number = 0;
+  @State shelfMode: ShelfTabMode = 'continue';
+  @State shelfContinueItems: ShelfCardItem[] = [];
+  @State shelfHistoryItems: ShelfCardItem[] = [];
+  @State shelfBusyText: string = '';
+  @State shelfErrorText: string = '';
+  @State showShelfMenu: boolean = false;
+  @State todayReadingLabel: string = '00:00:00';
+  @State shelfManageMode: boolean = false;
+  @State shelfEditMode: boolean = false;
+  @State selectedShelfKeys: string[] = [];
 
   aboutToAppear(): void {
-    this.bootstrap();
+    this.shelfRefreshSeed++;
   }
 
-  async bootstrap(): Promise<void> {
-    await this.loadBooks('');
-    await this.loadProfile();
-    await this.loadPlans();
+  onPageShow(): void {
+    this.shelfRefreshSeed++;
   }
 
-  async loadBooks(keyword: string): Promise<void> {
-    this.errorText = '';
-    try {
-      this.books = await ApiClient.searchBooks(keyword, this.tag);
-    } catch (err) {
-      this.errorText = `后端连接失败：${err}`;
+  hostContext(): common.UIAbilityContext | undefined {
+    return getContext(this) as common.UIAbilityContext | undefined;
+  }
+
+  visibleShelfItems(): ShelfCardItem[] {
+    return this.shelfMode === 'continue' ? this.shelfContinueItems : this.shelfHistoryItems;
+  }
+
+  isShelfSelected(itemKey: string): boolean {
+    for (let i = 0; i < this.selectedShelfKeys.length; i++) {
+      if (this.selectedShelfKeys[i] === itemKey) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  resetShelfModes(): void {
+    this.shelfManageMode = false;
+    this.shelfEditMode = false;
+    this.selectedShelfKeys = [];
+  }
+
+  updateShelfMode(mode: ShelfTabMode): void {
+    this.shelfMode = mode;
+    this.showShelfMenu = false;
+    this.resetShelfModes();
+  }
+
+  toggleManageMode(): void {
+    this.shelfManageMode = !this.shelfManageMode;
+    if (this.shelfManageMode) {
+      this.shelfEditMode = false;
+      this.selectedShelfKeys = [];
     }
   }
 
-  async loadPlans(): Promise<void> {
-    try {
-      this.plans = await ApiClient.listPlans(USER_ID);
-    } catch (err) {
-      this.errorText = `计划加载失败：${err}`;
+  toggleEditMode(): void {
+    this.shelfEditMode = !this.shelfEditMode;
+    if (this.shelfEditMode) {
+      this.shelfManageMode = false;
+      this.selectedShelfKeys = [];
+    } else {
+      this.selectedShelfKeys = [];
     }
   }
 
-  async loadProfile(): Promise<void> {
-    try {
-      const data: ProfileBundle = await ApiClient.profile(USER_ID);
-      this.profile = data.profile;
-      this.favorites = data.favorites;
-      this.notes = data.notes;
-      this.plans = data.plans;
-    } catch (err) {
-      this.errorText = `画像加载失败：${err}`;
+  toggleSelection(itemKey: string): void {
+    const nextSelected: string[] = [];
+    let existed: boolean = false;
+    for (let i = 0; i < this.selectedShelfKeys.length; i++) {
+      if (this.selectedShelfKeys[i] === itemKey) {
+        existed = true;
+      } else {
+        nextSelected.push(this.selectedShelfKeys[i]);
+      }
     }
+    if (!existed) {
+      nextSelected.push(itemKey);
+    }
+    this.selectedShelfKeys = nextSelected;
   }
 
-  async runRecommend(): Promise<void> {
-    this.busyText = 'AI 正在检索图书资料';
-    this.errorText = '';
-    try {
-      const result: RecommendResult = await ApiClient.recommend(USER_ID, this.query);
-      this.recommendations = result.book_list || [];
-      this.recommendReason = result.reason;
-      this.sources = result.sources || [];
-    } catch (err) {
-      this.errorText = `推荐失败：${err}`;
-    } finally {
-      this.busyText = '';
+  pickedTag(rawTags: string, fallback: string): string {
+    const text = rawTags ? rawTags.trim() : '';
+    if (!text) {
+      return fallback;
     }
+    const separators: string[] = [',', '，', '/', ' '];
+    for (let i = 0; i < separators.length; i++) {
+      const index: number = text.indexOf(separators[i]);
+      if (index > 0) {
+        return text.substring(0, index).trim();
+      }
+    }
+    return text;
   }
 
-  async openBook(book: Book): Promise<void> {
-    this.selectedBook = book;
-    this.showDetail = true;
-    try {
-      this.selectedBook = await ApiClient.getBook(book.id);
-    } catch (err) {
-      this.errorText = `详情加载失败：${err}`;
+  accentBySeed(seed: string): string {
+    const palette: string[] = [Theme.mobileRed, Theme.mobileBlue, Theme.mobilePurple, Theme.mobileOrange];
+    let score: number = 0;
+    for (let i = 0; i < seed.length; i++) {
+      score += seed.charCodeAt(i);
     }
+    return palette[score % palette.length];
   }
 
-  async openBookById(bookId: number): Promise<void> {
-    try {
-      this.selectedBook = await ApiClient.getBook(bookId);
-      this.showDetail = true;
-    } catch (err) {
-      this.errorText = `详情加载失败：${err}`;
+  toneBySeed(seed: string): string {
+    const tones: string[] = ['#EEF2FF', '#FFF3EC', '#F2F5FF', '#EEF8F4', '#FFF6E9'];
+    let score: number = 0;
+    for (let i = 0; i < seed.length; i++) {
+      score += seed.charCodeAt(i);
     }
+    return tones[score % tones.length];
   }
 
-  async addPlan(bookId: number): Promise<void> {
-    this.busyText = '正在写入阅读计划';
-    try {
-      await ApiClient.createPlan(USER_ID, bookId, 14);
-      await this.loadPlans();
-    } catch (err) {
-      this.errorText = `创建计划失败：${err}`;
-    } finally {
-      this.busyText = '';
+  formatDateLabel(isoText: string): string {
+    if (!isoText) {
+      return '刚刚';
     }
+    const date: Date = new Date(isoText);
+    if (Number.isNaN(date.getTime())) {
+      return isoText;
+    }
+    const month: string = `${date.getMonth() + 1}`.padStart(2, '0');
+    const day: string = `${date.getDate()}`.padStart(2, '0');
+    const hour: string = `${date.getHours()}`.padStart(2, '0');
+    const minute: string = `${date.getMinutes()}`.padStart(2, '0');
+    return `${month}-${day} ${hour}:${minute}`;
   }
 
-  async addFavorite(bookId: number): Promise<void> {
-    try {
-      this.favorites = await ApiClient.favorite(USER_ID, bookId);
-    } catch (err) {
-      this.errorText = `收藏失败：${err}`;
+  findRemoteSession(sessions: RemoteShelfSession[], bookId: number): RemoteShelfSession | null {
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessions[i].bookId === bookId) {
+        return sessions[i];
+      }
     }
+    return null;
   }
 
-  async askBook(): Promise<void> {
-    this.busyText = 'AI 伴读正在查找来源片段';
-    this.chatAnswer = '';
-    try {
-      const result: ChatResult = await ApiClient.chat(USER_ID, this.selectedBook.id, this.chatQuestion);
-      this.chatAnswer = result.answer;
-      this.sources = result.sources || [];
-    } catch (err) {
-      this.errorText = `伴读失败：${err}`;
-    } finally {
-      this.busyText = '';
+  buildContinueItems(storeState: ShelfStoreState, plans: PlanItem[]): ShelfCardItem[] {
+    const nextItems: ShelfCardItem[] = [];
+    for (let i = 0; i < storeState.localBooks.length; i++) {
+      const item: LocalShelfBook = storeState.localBooks[i];
+      const accent: string = this.accentBySeed(item.extension || item.title);
+      const updatedAt: string = item.lastOpenedAt || item.importedAt;
+      nextItems.push({
+        key: item.key,
+        sourceType: 'local',
+        title: item.title,
+        author: item.displayName,
+        tag: item.extension ? item.extension.toUpperCase() : 'LOCAL',
+        progress: 0,
+        progressText: item.openCount > 0 ? `已打开 ${item.openCount} 次` : '未开始阅读',
+        accent,
+        lastRead: item.lastOpenedAt ? `上次打开：${this.formatDateLabel(item.lastOpenedAt)}` : `导入时间：${this.formatDateLabel(item.importedAt)}`,
+        coverTone: this.toneBySeed(item.displayName),
+        updatedAt,
+        actionLabel: '打开文件',
+        manageLabel: '移出书架',
+        localBookKey: item.key,
+        openCount: item.openCount,
+      });
     }
+
+    for (let i = 0; i < plans.length; i++) {
+      const plan: PlanItem = plans[i];
+      if (plan.status === 'finished' && plan.progress >= 100) {
+        continue;
+      }
+      let hidden: boolean = false;
+      for (let index = 0; index < storeState.hiddenRemoteBookIds.length; index++) {
+        if (storeState.hiddenRemoteBookIds[index] === plan.bookId) {
+          hidden = true;
+          break;
+        }
+      }
+      if (hidden) {
+        continue;
+      }
+      const session = this.findRemoteSession(storeState.remoteSessions, plan.bookId);
+      const seed: string = `${plan.title}-${plan.author}`;
+      const accent: string = this.accentBySeed(seed);
+      const updatedAt: string = session ? session.updatedAt : `1970-01-01T00:${`${plan.id % 60}`.padStart(2, '0')}:00.000Z`;
+      nextItems.push({
+        key: session ? session.key : `remote:${plan.bookId}`,
+        sourceType: 'remote',
+        title: plan.title,
+        author: plan.author,
+        tag: this.pickedTag(session ? session.tags : '', '在读'),
+        progress: session ? session.progress : plan.progress,
+        progressText: `${session ? session.progress : plan.progress}%`,
+        accent,
+        lastRead: session && session.chapterTitle ? `上次阅读：${session.chapterTitle}` : `当前进度：${plan.progress}%`,
+        coverTone: this.toneBySeed(seed),
+        updatedAt,
+        actionLabel: '继续阅读',
+        manageLabel: '移出书架',
+        remoteBookId: plan.bookId,
+        chapterId: session ? session.chapterId : '',
+      });
+    }
+
+    for (let i = 0; i < storeState.remoteSessions.length; i++) {
+      const session = storeState.remoteSessions[i];
+      let existsInPlans: boolean = false;
+      let hidden: boolean = false;
+      for (let index = 0; index < plans.length; index++) {
+        if (plans[index].bookId === session.bookId) {
+          existsInPlans = true;
+          break;
+        }
+      }
+      for (let index = 0; index < storeState.hiddenRemoteBookIds.length; index++) {
+        if (storeState.hiddenRemoteBookIds[index] === session.bookId) {
+          hidden = true;
+          break;
+        }
+      }
+      if (existsInPlans || hidden) {
+        continue;
+      }
+      const seed: string = `${session.title}-${session.author}`;
+      nextItems.push({
+        key: session.key,
+        sourceType: 'remote',
+        title: session.title,
+        author: session.author,
+        tag: this.pickedTag(session.tags, '在读'),
+        progress: session.progress,
+        progressText: `${session.progress}%`,
+        accent: this.accentBySeed(seed),
+        lastRead: session.chapterTitle ? `上次阅读：${session.chapterTitle}` : `最近阅读：${this.formatDateLabel(session.updatedAt)}`,
+        coverTone: this.toneBySeed(seed),
+        updatedAt: session.updatedAt,
+        actionLabel: '继续阅读',
+        manageLabel: '移出书架',
+        remoteBookId: session.bookId,
+        chapterId: session.chapterId,
+      });
+    }
+
+    nextItems.sort((left: ShelfCardItem, right: ShelfCardItem) => {
+      return right.updatedAt.localeCompare(left.updatedAt);
+    });
+    return nextItems;
   }
 
-  async saveChatNote(): Promise<void> {
-    if (!this.chatAnswer) {
+  buildHistoryItems(storeState: ShelfStoreState): ShelfCardItem[] {
+    const nextItems: ShelfCardItem[] = [];
+    for (let i = 0; i < storeState.browseHistory.length; i++) {
+      const history = storeState.browseHistory[i];
+      const session = history.remoteBookId ? this.findRemoteSession(storeState.remoteSessions, history.remoteBookId) : null;
+      let localBook: LocalShelfBook | null = null;
+      if (history.localBookKey) {
+        for (let index = 0; index < storeState.localBooks.length; index++) {
+          if (storeState.localBooks[index].key === history.localBookKey) {
+            localBook = storeState.localBooks[index];
+            break;
+          }
+        }
+      }
+      nextItems.push({
+        key: history.key,
+        sourceType: history.sourceType,
+        title: history.title,
+        author: history.subtitle,
+        tag: history.sourceType === 'local' ? '浏览记录' : this.pickedTag(session ? session.tags : '', '浏览记录'),
+        progress: session ? session.progress : 0,
+        progressText: session ? `${session.progress}%` : (localBook ? `已打开 ${localBook.openCount} 次` : history.actionText),
+        accent: history.sourceType === 'local' ? Theme.mobileBlue : Theme.mobileOrange,
+        lastRead: `${history.actionText} · ${this.formatDateLabel(history.updatedAt)}`,
+        coverTone: history.coverTone || this.toneBySeed(history.title),
+        updatedAt: history.updatedAt,
+        actionLabel: history.sourceType === 'local' ? '打开文件' : '打开书籍',
+        manageLabel: '删除记录',
+        remoteBookId: history.remoteBookId,
+        chapterId: session ? session.chapterId : '',
+        localBookKey: history.localBookKey,
+        openCount: localBook ? localBook.openCount : 0,
+      });
+    }
+    nextItems.sort((left: ShelfCardItem, right: ShelfCardItem) => {
+      return right.updatedAt.localeCompare(left.updatedAt);
+    });
+    return nextItems;
+  }
+
+  async loadShelfData(showBusy: boolean = false): Promise<void> {
+    const context = this.hostContext();
+    if (!context) {
+      this.shelfErrorText = '当前页面上下文不可用，无法同步书架';
       return;
     }
-    try {
-      await ApiClient.saveNote(USER_ID, this.selectedBook.id, this.chatAnswer);
-      await this.loadProfile();
-    } catch (err) {
-      this.errorText = `保存笔记失败：${err}`;
+    if (showBusy) {
+      this.shelfBusyText = '正在同步书架';
     }
-  }
-
-  async openCommerce(book: Book): Promise<void> {
-    this.selectedBook = book;
-    this.showCommerce = true;
-    this.busyText = '正在聚合馆藏与电商结果';
+    this.shelfErrorText = '';
     try {
-      const data: CommerceBundle = await ApiClient.commerceSearch(USER_ID, book.id, book.isbn);
-      this.commerceResults = data.results || [];
+      const storeState: ShelfStoreState = await ShelfStore.load(context);
+      let plans: PlanItem[] = [];
+      try {
+        plans = await ApiClient.listPlans(USER_ID);
+      } catch (apiErr) {
+        this.shelfErrorText = `云端计划同步失败：${apiErr}`;
+      }
+      this.shelfContinueItems = createContinueItems(storeState, plans) as ShelfCardItem[];
+      this.shelfHistoryItems = createHistoryItems(storeState, plans) as ShelfCardItem[];
+      this.todayReadingLabel = formatReadingDuration(storeState.todayReading.seconds);
     } catch (err) {
-      this.errorText = `聚合搜索失败：${err}`;
+      this.shelfErrorText = `书架加载失败：${err}`;
+      this.shelfContinueItems = [];
+      this.shelfHistoryItems = [];
+      this.todayReadingLabel = '00:00:00';
     } finally {
-      this.busyText = '';
+      this.shelfBusyText = '';
     }
   }
 
-  async confirm(item: CommerceResult): Promise<void> {
-    try {
-      await ApiClient.confirmPurchase(USER_ID, this.selectedBook.id, item);
-      await this.loadPlans();
-      this.showCommerce = false;
-      this.activeTab = 2;
-    } catch (err) {
-      this.errorText = `确认失败：${err}`;
+  async openShelfItem(item: ShelfCardItem): Promise<void> {
+    if (this.shelfEditMode) {
+      this.toggleSelection(item.key);
+      return;
+    }
+    if (item.sourceType === 'remote' && item.remoteBookId) {
+      if (this.shelfMode === 'history') {
+        openBookDetail(item.remoteBookId);
+      } else {
+        openReader(item.remoteBookId, item.chapterId || '');
+      }
+      return;
+    }
+    if (item.sourceType === 'local' && item.localBookKey) {
+      const context = this.hostContext();
+      if (!context) {
+        this.shelfErrorText = '当前页面上下文不可用，无法打开本地书籍';
+        return;
+      }
+      this.shelfBusyText = '正在打开本地书籍';
+      this.shelfErrorText = '';
+      try {
+        await ShelfStore.openLocalBook(context, item.localBookKey);
+        await this.loadShelfData(false);
+        this.shelfBusyText = '本地书籍已打开';
+      } catch (err) {
+        this.shelfErrorText = `打开本地书籍失败：${err}`;
+        this.shelfBusyText = '';
+      }
     }
   }
 
-  async saveProfile(): Promise<void> {
-    try {
-      this.profile = await ApiClient.saveProfile(this.profile);
-      await this.loadProfile();
-    } catch (err) {
-      this.errorText = `保存画像失败：${err}`;
+  async importLocalBooks(): Promise<void> {
+    const context = this.hostContext();
+    if (!context) {
+      this.shelfErrorText = '当前页面上下文不可用，无法导入本地书籍';
+      return;
     }
+    this.shelfBusyText = '正在选择本地书籍';
+    this.shelfErrorText = '';
+    try {
+      const documentPicker = new picker.DocumentViewPicker();
+      const options = new picker.DocumentSelectOptions();
+      options.maxSelectNumber = 10;
+      options.fileSuffixFilters = ['书籍|.pdf,.epub,.txt,.md,.markdown,.doc,.docx'];
+      const selectedUris: Array<string> = await documentPicker.select(options);
+      if (!selectedUris || selectedUris.length === 0) {
+        this.shelfBusyText = '';
+        return;
+      }
+      this.shelfBusyText = '正在导入本地书籍';
+      const result = await ShelfStore.importLocalBooks(context, selectedUris);
+      await this.loadShelfData(false);
+      if (result.imported.length > 0) {
+        this.shelfBusyText = `已导入 ${result.imported.length} 本本地书籍`;
+      } else {
+        this.shelfBusyText = '所选书籍已在书架中';
+      }
+    } catch (err) {
+      this.shelfErrorText = `导入本地书籍失败：${err}`;
+      this.shelfBusyText = '';
+    }
+  }
+
+  async manageShelfItem(item: ShelfCardItem): Promise<void> {
+    const context = this.hostContext();
+    if (!context) {
+      this.shelfErrorText = '当前页面上下文不可用，无法更新书架';
+      return;
+    }
+    this.shelfBusyText = this.shelfMode === 'history' ? '正在删除阅读记录' : '正在从书架移除';
+    this.shelfErrorText = '';
+    try {
+      if (this.shelfMode === 'history') {
+        await ShelfStore.deleteHistoryRecords(context, [item.key]);
+      } else {
+        await ShelfStore.removeFromShelf(context, [item.key]);
+      }
+      await this.loadShelfData(false);
+      this.shelfBusyText = this.shelfMode === 'history' ? '阅读记录已删除' : '已从书架移除';
+      this.resetShelfModes();
+    } catch (err) {
+      this.shelfErrorText = `操作失败：${err}`;
+      this.shelfBusyText = '';
+    }
+  }
+
+  async commitSelectedShelfItems(): Promise<void> {
+    if (this.selectedShelfKeys.length === 0) {
+      this.shelfErrorText = this.shelfMode === 'history' ? '请先选择要删除的阅读记录' : '请先选择要移出的书籍';
+      return;
+    }
+    const context = this.hostContext();
+    if (!context) {
+      this.shelfErrorText = '当前页面上下文不可用，无法更新书架';
+      return;
+    }
+    this.shelfBusyText = this.shelfMode === 'history' ? '正在批量删除阅读记录' : '正在批量移出书架';
+    this.shelfErrorText = '';
+    try {
+      if (this.shelfMode === 'history') {
+        await ShelfStore.deleteHistoryRecords(context, this.selectedShelfKeys);
+      } else {
+        await ShelfStore.removeFromShelf(context, this.selectedShelfKeys);
+      }
+      await this.loadShelfData(false);
+      this.shelfBusyText = this.shelfMode === 'history' ? '批量删除完成' : '批量移出完成';
+      this.resetShelfModes();
+    } catch (err) {
+      this.shelfErrorText = `批量操作失败：${err}`;
+      this.shelfBusyText = '';
+    }
+  }
+
+  toggleShelfMenu(): void {
+    this.showShelfMenu = !this.showShelfMenu;
+  }
+
+  async addHistoryItemToShelf(item: ShelfCardItem): Promise<void> {
+    if (item.sourceType !== 'remote' || !item.remoteBookId || item.inShelf) {
+      return;
+    }
+    const context = this.hostContext();
+    if (!context) {
+      this.shelfErrorText = '当前页面上下文不可用，无法加入书架';
+      return;
+    }
+    this.shelfBusyText = '正在加入书架';
+    this.shelfErrorText = '';
+    try {
+      await ShelfStore.restoreHistoryBookToShelf(context, item.key);
+      await this.loadShelfData(false);
+      this.shelfBusyText = '已加入书架';
+    } catch (err) {
+      this.shelfErrorText = `加入书架失败：${err}`;
+      this.shelfBusyText = '';
+    }
+  }
+
+  async startScan(): Promise<void> {
+    const context = this.hostContext();
+    this.showShelfMenu = false;
+    if (!context) {
+      this.shelfErrorText = '当前页面上下文不可用，无法启动扫一扫';
+      return;
+    }
+    this.shelfBusyText = '正在打开扫一扫';
+    this.shelfErrorText = '';
+    try {
+      const keyword: string = await this.pickScanKeyword(context);
+      if (!keyword) {
+        this.shelfBusyText = '';
+        this.shelfErrorText = '未识别到可用于搜索的条码或文本';
+        return;
+      }
+      this.shelfBusyText = '扫码成功，正在搜索图书';
+      openSearch(keyword);
+    } catch (err) {
+      this.shelfErrorText = `扫一扫失败：${err}`;
+      this.shelfBusyText = '';
+    }
+  }
+
+  async pickScanKeyword(context: common.UIAbilityContext): Promise<string> {
+    try {
+      const profile = new cameraPicker.PickerProfile();
+      profile.cameraPosition = camera.CameraPosition.CAMERA_POSITION_BACK;
+      const result = await cameraPicker.pick(context, [cameraPicker.PickerMediaType.PHOTO], profile);
+      return this.uriToKeyword(result.resultUri);
+    } catch (_) {
+      const photoPicker = new picker.PhotoViewPicker();
+      const options = new picker.PhotoSelectOptions();
+      options.MIMEType = picker.PhotoViewMIMETypes.IMAGE_TYPE;
+      options.maxSelectNumber = 1;
+      const result = await photoPicker.select(options);
+      if (!result.photoUris || result.photoUris.length === 0) {
+        return '';
+      }
+      return this.uriToKeyword(result.photoUris[0]);
+    }
+  }
+
+  uriToKeyword(uri: string): string {
+    if (!uri) {
+      return '';
+    }
+    const segments: string[] = uri.split('/');
+    const fileName: string = segments.length > 0 ? segments[segments.length - 1] : uri;
+    return fileName.replace(/\.[^.]+$/, '').replace(/[%_\-]+/g, ' ').trim();
   }
 
   build() {
-    Stack() {
-      Column() {
-        this.TopBar()
-        Scroll(this.scroller) {
-          Column({ space: 16 }) {
-            if (this.errorText) {
-              this.StatusPill(this.errorText, '#432026')
-            }
-            if (this.busyText) {
-              this.StatusPill(this.busyText, '#1D3541')
-            }
-            if (this.activeTab === 0) {
-              this.HomeView()
-            } else if (this.activeTab === 1) {
-              this.SearchView()
-            } else if (this.activeTab === 2) {
-              this.PlanView()
-            } else {
-              this.ProfileView()
-            }
+    Column() {
+      Scroll() {
+        Column() {
+          Column({ space: this.sectionGap() }) {
+            this.ActivePage()
           }
           .width('100%')
-          .padding({ left: 20, right: 20, bottom: 100 })
+          .constraintSize({ maxWidth: this.contentMaxWidth() })
+          .padding({
+            left: this.pagePadding(),
+            right: this.pagePadding(),
+            top: this.pageTopPadding(),
+            bottom: this.pageBottomPadding(),
+          })
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+      }
+      .layoutWeight(1)
+
+      this.BottomTabs()
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(Theme.mobileCanvas)
+    .onAreaChange((_, area) => {
+      const nextWidth: number = typeof area.width === 'number' ? area.width : Number(area.width);
+      if (Number.isFinite(nextWidth) && nextWidth > 0) {
+        this.pageWidth = nextWidth;
+      }
+    })
+  }
+
+  isCompact(): boolean {
+    return this.pageWidth < 360;
+  }
+
+  isTabletLike(): boolean {
+    return this.pageWidth >= 600;
+  }
+
+  pagePadding(): number {
+    if (this.pageWidth >= 900) {
+      return 32;
+    }
+    if (this.isTabletLike()) {
+      return 24;
+    }
+    if (this.isCompact()) {
+      return 14;
+    }
+    return 16;
+  }
+
+  pageTopPadding(): number {
+    if (this.activeTab === 0) {
+      return this.isCompact() ? 6 : 8;
+    }
+    if (this.pageWidth >= 900) {
+      return 22;
+    }
+    if (this.isTabletLike()) {
+      return 18;
+    }
+    return 12;
+  }
+
+  pageBottomPadding(): number {
+    return this.isCompact() ? 20 : 28;
+  }
+
+  sectionGap(): number {
+    return this.isCompact() ? 16 : 18;
+  }
+
+  contentMaxWidth(): number {
+    if (this.pageWidth >= 900) {
+      return 760;
+    }
+    if (this.isTabletLike()) {
+      return 660;
+    }
+    return 640;
+  }
+
+  shelfCoverWidth(): number {
+    if (this.isTabletLike()) {
+      return 98;
+    }
+    if (this.isCompact()) {
+      return 80;
+    }
+    return 90;
+  }
+
+  shelfCoverHeight(): number {
+    return Math.floor(this.shelfCoverWidth() * 1.36);
+  }
+
+  titleSize(): number {
+    if (this.pageWidth >= 900) {
+      return 34;
+    }
+    if (this.isCompact()) {
+      return 26;
+    }
+    return 30;
+  }
+
+  sidebarWidth(): number {
+    if (this.isTabletLike()) {
+      return 92;
+    }
+    return this.isCompact() ? 72 : 82;
+  }
+
+  tabAccent(index: number): string {
+    if (index === 0 || index === 4) {
+      return Theme.mobileRed;
+    }
+    return Theme.mobileBlue;
+  }
+
+  tabIcon(index: number): Resource {
+    const active: boolean = this.activeTab === index;
+    if (index === 0) {
+      return active ? $r('app.media.mobile_tab_shelf_active') : $r('app.media.mobile_tab_shelf');
+    }
+    if (index === 1) {
+      return active ? $r('app.media.mobile_tab_store_active') : $r('app.media.mobile_tab_store');
+    }
+    if (index === 2) {
+      return active ? $r('app.media.mobile_tab_category_active') : $r('app.media.mobile_tab_category');
+    }
+    if (index === 3) {
+      return active ? $r('app.media.mobile_tab_discover_active') : $r('app.media.mobile_tab_discover');
+    }
+    return active ? $r('app.media.mobile_tab_me_active') : $r('app.media.mobile_tab_me');
+  }
+
+  @Builder
+  ActivePage() {
+    if (this.activeTab === 0) {
+      this.FunctionalShelfPage()
+    } else if (this.activeTab === 1) {
+      this.StorePage()
+    } else if (this.activeTab === 2) {
+      this.CategoryPage()
+    } else if (this.activeTab === 3) {
+      this.DiscoverPage()
+    } else {
+      this.ProfilePage()
+    }
+  }
+
+  @Builder
+  FunctionalShelfPage() {
+    ShelfHomePanel({
+      pageWidth: this.pageWidth,
+      refreshSeed: this.shelfRefreshSeed,
+    })
+  }
+
+  @Builder
+  LegacyFunctionalShelfPage() {
+    Column({ space: this.sectionGap() }) {
+      Row({ space: 12 }) {
+        Text('书架')
+          .fontColor(Theme.mobileText)
+          .fontSize(this.titleSize())
+          .fontWeight(FontWeight.Bold)
+
+        Row({ space: 10 }) {
+          Image($r('app.media.discover_search'))
+            .width(22)
+            .height(22)
+          Text('搜索书名 / 作者 / 关键词')
+            .fontColor('#8C92A5')
+            .fontSize(this.isCompact() ? 15 : 16)
+          Blank()
         }
         .layoutWeight(1)
-        this.TabBar()
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor('#090B10')
-
-      if (this.showDetail) {
-        this.DetailSheet()
-      }
-      if (this.showChat) {
-        this.ChatSheet()
-      }
-      if (this.showCommerce) {
-        this.CommerceSheet()
-      }
-    }
-  }
-
-  @Builder
-  TopBar() {
-    Row() {
-      Column({ space: 4 }) {
-        Text('鸿蒙智阅')
-          .fontColor('#F5F7FA')
-          .fontSize(28)
-          .fontWeight(FontWeight.Bold)
-        Text('AI 个性化图书推荐与伴读')
-          .fontColor('#7D8794')
-          .fontSize(13)
-      }
-      Blank()
-      Column({ space: 4 }) {
-        Text(this.profile.grade)
-          .fontColor('#D9B46E')
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-        Text('学习画像')
-          .fontColor('#6F7784')
-          .fontSize(11)
-      }
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      .backgroundColor('#171512')
-      .borderRadius(8)
-    }
-    .width('100%')
-    .padding({ left: 20, right: 20, top: 20, bottom: 12 })
-  }
-
-  @Builder
-  HomeView() {
-    Column({ space: 16 }) {
-      this.HeroPanel()
-      this.SectionHeader('精选书架', `${this.books.length} 本图书已接入知识库`)
-      Row({ space: 14 }) {
-        ForEach(this.books.slice(0, 4), (book: Book) => {
-          this.FeaturedBook(book)
-        }, (book: Book) => `${book.id}`)
-      }
-      .width('100%')
-      this.SectionHeader('AI 推荐解释', '围绕画像、目标和来源片段生成')
-      if (this.recommendations.length > 0) {
-        ForEach(this.recommendations, (item: RecommendationBook) => {
-          this.RecommendCard(item)
-        }, (item: RecommendationBook) => `${item.id}`)
-        this.SourceList()
-      } else {
-        this.EmptyState('输入阅读目标后，推荐理由和来源片段会出现在这里')
-      }
-      this.SectionHeader('阅读路径', '从找书到伴读再到计划沉淀')
-      Row({ space: 10 }) {
-        this.MetricCard('画像', this.profile.major, '#88BFD8')
-        this.MetricCard('预算', `¥${this.profile.budget}`, '#D9B46E')
-        this.MetricCard('计划', `${this.plans.length} 个`, '#9DA8FF')
-      }
-    }
-    .width('100%')
-  }
-
-  @Builder
-  HeroPanel() {
-    Column({ space: 14 }) {
-      Row() {
-        Column({ space: 6 }) {
-          Text('今天想读什么？')
-            .fontColor('#F5F7FA')
-            .fontSize(22)
-            .fontWeight(FontWeight.Bold)
-          Text('输入方向，AI 会按你的画像、难度和来源片段解释推荐')
-            .fontColor('#94A0AF')
-            .fontSize(13)
-            .lineHeight(20)
-        }
-        Blank()
-        Text('RAG')
-          .fontColor('#081019')
-          .fontSize(12)
-          .fontWeight(FontWeight.Bold)
-          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-          .backgroundColor('#88BFD8')
-          .borderRadius(8)
-      }
-      TextInput({ placeholder: '例如：人工智能入门、考研英语、算法竞赛', text: this.query })
-        .height(48)
-        .fontColor('#F5F7FA')
-        .placeholderColor('#657080')
-        .backgroundColor('#0F141C')
-        .borderRadius(8)
-        .padding({ left: 12, right: 12 })
-        .onChange((value: string) => {
-          this.query = value;
+        .height(this.isCompact() ? 48 : 52)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor(Theme.mobileSurface)
+        .borderRadius(26)
+        .shadow({ radius: 16, color: '#18000000', offsetX: 0, offsetY: 8 })
+        .onClick(() => {
+          openSearch();
         })
-      Row({ space: 10 }) {
-        Button('AI 推荐')
-          .layoutWeight(1)
-          .height(46)
-          .fontColor('#081019')
-          .backgroundColor('#88BFD8')
-          .borderRadius(8)
-          .onClick(() => this.runRecommend())
-        Button('去搜索')
-          .width(116)
-          .height(46)
-          .fontColor('#F5F7FA')
-          .backgroundColor('#1D2430')
-          .borderRadius(8)
+
+        Stack() {
+          this.CircleActionButton($r('app.media.mobile_more_circle'))
+        }
+        .onClick(() => {
+          this.loadShelfData(true);
+        })
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Row() {
+        Row() {
+          this.TopTextTab('继续阅读', this.shelfMode === 'continue', Theme.mobileRed)
+        }
+        .onClick(() => {
+          this.updateShelfMode('continue');
+        })
+        Row() {
+          this.TopTextTab('浏览记录', this.shelfMode === 'history', Theme.mobileBlue)
+        }
+        .onClick(() => {
+          this.updateShelfMode('history');
+        })
+        Blank()
+        Text(this.shelfManageMode ? '完成' : '管理')
+          .fontColor(this.shelfManageMode ? Theme.mobileRed : Theme.mobileSubtext)
+          .fontSize(16)
+          .fontWeight(this.shelfManageMode ? FontWeight.Medium : FontWeight.Regular)
           .onClick(() => {
-            this.activeTab = 1;
+            this.toggleManageMode();
+          })
+        this.HeaderDivider()
+        Text(this.shelfEditMode ? `删除(${this.selectedShelfKeys.length})` : '编辑')
+          .fontColor(this.shelfEditMode ? Theme.mobileBlue : Theme.mobileSubtext)
+          .fontSize(16)
+          .fontWeight(this.shelfEditMode ? FontWeight.Medium : FontWeight.Regular)
+          .onClick(() => {
+            if (this.shelfEditMode && this.selectedShelfKeys.length > 0) {
+              this.commitSelectedShelfItems();
+            } else {
+              this.toggleEditMode();
+            }
           })
       }
+      .width('100%')
+      .alignItems(VerticalAlign.Bottom)
+
+      if (this.shelfBusyText) {
+        this.ShelfStatusBanner(this.shelfBusyText, Theme.mobileBlue)
+      }
+      if (this.shelfErrorText) {
+        this.ShelfStatusBanner(this.shelfErrorText, Theme.mobileRed)
+      }
+
+      if (this.visibleShelfItems().length > 0) {
+        ForEach(this.visibleShelfItems(), (item: ShelfCardItem) => {
+          this.DynamicShelfBookCard(item)
+        }, (item: ShelfCardItem) => item.key)
+      } else {
+        this.EmptyShelfCard()
+      }
+
+      if (this.shelfEditMode) {
+        this.ShelfSelectionCard()
+      }
+
+      this.DynamicImportCard()
+    }
+    .width('100%')
+  }
+
+  @Builder
+  DynamicShelfBookCard(item: ShelfCardItem) {
+    Row({ space: 14 }) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        this.BookPlaceholder(this.shelfCoverWidth(), this.shelfCoverHeight(), item.coverTone, item.sourceType === 'remote', true)
+        if (this.shelfEditMode) {
+          Stack() {
+            this.ShelfSelectionBadge(this.isShelfSelected(item.key))
+          }
+          .margin({ left: 10, top: 10 })
+        }
+      }
+      .onClick(() => {
+        this.openShelfItem(item);
+      })
+
+      Column({ space: 10 }) {
+        Row({ space: 12 }) {
+          Column({ space: 8 }) {
+            Text(item.title)
+              .fontColor(Theme.mobileText)
+              .fontSize(this.isCompact() ? 18 : 20)
+              .fontWeight(FontWeight.Bold)
+              .maxLines(2)
+            Row({ space: 10 }) {
+              Text(item.author)
+                .fontColor(Theme.mobileSubtext)
+                .fontSize(14)
+                .maxLines(1)
+              this.TagPill(item.tag, item.accent)
+            }
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          if (!this.shelfManageMode && !this.shelfEditMode) {
+            Row({ space: 6 }) {
+              Text(item.actionLabel)
+                .fontColor(item.sourceType === 'local' ? Theme.mobileBlue : Theme.mobileRed)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+              Image($r('app.media.icon_chevron_right'))
+                .width(14)
+                .height(14)
+            }
+            .margin({ top: 4 })
+            .onClick(() => {
+              this.openShelfItem(item);
+            })
+          }
+        }
+        .width('100%')
+
+        if (this.shelfMode === 'continue') {
+          Row({ space: 8 }) {
+            Text(item.progressText)
+              .fontColor(item.accent)
+              .fontSize(this.isCompact() ? 16 : 17)
+              .fontWeight(FontWeight.Bold)
+            this.ProgressBar(item.progress, item.accent)
+            this.MoreDots()
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+        } else {
+          Row({ space: 8 }) {
+            Text(item.progressText)
+              .fontColor(item.accent)
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+              .backgroundColor('#F4F6FB')
+              .borderRadius(12)
+            Blank()
+            Text(item.actionLabel)
+              .fontColor(Theme.mobileSubtext)
+              .fontSize(13)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+        }
+
+        Text(item.lastRead)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(14)
+          .maxLines(2)
+
+        if (this.shelfManageMode) {
+          Button(item.manageLabel)
+            .height(34)
+            .fontColor(Theme.mobileSurface)
+            .backgroundColor(this.shelfMode === 'history' ? Theme.mobileRed : Theme.mobileBlue)
+            .borderRadius(14)
+            .padding({ left: 14, right: 14 })
+            .onClick(() => {
+              this.manageShelfItem(item);
+            })
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .onClick(() => {
+        this.openShelfItem(item);
+      })
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(24)
+    .shadow({ radius: 18, color: '#18000000', offsetX: 0, offsetY: 10 })
+  }
+
+  @Builder
+  DynamicImportCard() {
+    Row({ space: 14 }) {
+      Stack() {
+        Circle()
+          .width(48)
+          .height(48)
+          .fill('#FFF1F1')
+        Image($r('app.media.mobile_import_book'))
+          .width(24)
+          .height(24)
+      }
+      Column({ space: 6 }) {
+        Text('本地导入书籍')
+          .fontColor(Theme.mobileText)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+        Text('支持 PDF / EPUB / TXT / DOC 等格式')
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(14)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Image($r('app.media.icon_chevron_right'))
+        .width(16)
+        .height(16)
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 18, bottom: 18 })
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(22)
+    .shadow({ radius: 16, color: '#16000000', offsetX: 0, offsetY: 8 })
+    .onClick(() => {
+      this.importLocalBooks();
+    })
+  }
+
+  @Builder
+  EmptyShelfCard() {
+    Column({ space: 10 }) {
+      Text(this.shelfMode === 'continue' ? '书架里还没有继续阅读内容' : '还没有浏览记录')
+        .fontColor(Theme.mobileText)
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+      Text(this.shelfMode === 'continue' ? '从搜索页找书，或者导入本地 PDF 到书架。' : '打开图书详情页、阅读器或本地书籍后，痕迹会出现在这里。')
+        .fontColor(Theme.mobileSubtext)
+        .fontSize(14)
+        .lineHeight(22)
+        .textAlign(TextAlign.Center)
+    }
+    .width('100%')
+    .padding({ left: 22, right: 22, top: 28, bottom: 28 })
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(24)
+    .alignItems(HorizontalAlign.Center)
+    .shadow({ radius: 18, color: '#14000000', offsetX: 0, offsetY: 8 })
+  }
+
+  @Builder
+  ShelfSelectionCard() {
+    Row({ space: 12 }) {
+      Column({ space: 4 }) {
+        Text(`已选择 ${this.selectedShelfKeys.length} 项`)
+          .fontColor(Theme.mobileText)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+        Text(this.shelfMode === 'history' ? '批量删除阅读记录' : '批量把书籍移出书架')
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(13)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Button(this.shelfMode === 'history' ? '删除选中' : '移出选中')
+        .height(38)
+        .fontColor(Theme.mobileSurface)
+        .backgroundColor(this.selectedShelfKeys.length > 0 ? Theme.mobileBlue : '#C6CBD9')
+        .borderRadius(16)
+        .padding({ left: 16, right: 16 })
+        .enabled(this.selectedShelfKeys.length > 0)
+        .onClick(() => {
+          this.commitSelectedShelfItems();
+        })
     }
     .width('100%')
     .padding(16)
-    .backgroundColor('#121821')
-    .border({ width: 1, color: '#222B37' })
-    .borderRadius(8)
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(22)
+    .shadow({ radius: 16, color: '#14000000', offsetX: 0, offsetY: 8 })
   }
 
   @Builder
-  SearchView() {
-    Column({ space: 16 }) {
-      this.SectionHeader('发现图书', '搜索关键词、作者、标签或阅读方向')
-      Row({ space: 10 }) {
-        TextInput({ placeholder: '关键词、作者、方向', text: this.keyword })
-          .layoutWeight(1)
-          .height(46)
-          .fontColor('#F5F7FA')
-          .placeholderColor('#657080')
-          .backgroundColor('#111720')
-          .borderRadius(8)
-          .padding({ left: 12, right: 12 })
-          .onChange((value: string) => {
-            this.keyword = value;
-          })
-        Button('搜索')
-          .height(46)
-          .fontColor('#081019')
-          .backgroundColor('#88BFD8')
-          .borderRadius(8)
-          .onClick(() => this.loadBooks(this.keyword))
-      }
-      Row({ space: 8 }) {
-        ForEach(['人工智能', '算法', '考研', '通识', '设计'], (item: string) => {
-          Text(item)
-            .fontColor(this.tag === item ? '#081019' : '#AAB4C1')
-            .fontSize(13)
-            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(this.tag === item ? '#D9B46E' : '#171D27')
-            .borderRadius(8)
-            .onClick(() => {
-              this.tag = this.tag === item ? '' : item;
-              this.loadBooks(this.keyword);
-            })
-        })
-      }
-      ForEach(this.books, (book: Book) => {
-        this.BookCard(book)
-      }, (book: Book) => `${book.id}`)
-    }
-    .width('100%')
+  ShelfStatusBanner(text: string, color: string) {
+    Text(text)
+      .fontColor(Theme.mobileSurface)
+      .fontSize(13)
+      .lineHeight(18)
+      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+      .backgroundColor(color)
+      .borderRadius(16)
+      .width('100%')
   }
 
   @Builder
-  PlanView() {
-    Column({ space: 16 }) {
-      this.SectionHeader('阅读计划', '把推荐结果变成可推进的任务')
-      if (this.plans.length === 0) {
-        Column({ space: 10 }) {
-          Text('还没有计划')
-            .fontColor('#F5F7FA')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-          Text('先从首页推荐或图书详情里加入一本书，系统会沉淀到计划列表。')
-            .fontColor('#8994A3')
-            .fontSize(13)
-            .lineHeight(20)
-        }
-        .width('100%')
-        .padding(18)
-        .backgroundColor('#121821')
-        .borderRadius(8)
-      }
-      ForEach(this.plans, (item: PlanItem) => {
-        Row({ space: 14 }) {
-          this.PlanCover(item)
-          Column({ space: 10 }) {
-            Row() {
-              Column() {
-                Text(item.title)
-                  .fontColor('#F5F7FA')
-                  .fontSize(17)
-                  .fontWeight(FontWeight.Medium)
-                  .maxLines(1)
-                Text(`${item.targetDays} 天计划 · ${item.status}`)
-                  .fontColor('#7D8794')
-                  .fontSize(12)
-              }
-              Blank()
-              Text(`${item.progress}%`)
-                .fontColor('#D9B46E')
-                .fontSize(18)
-                .fontWeight(FontWeight.Bold)
-            }
-            Progress({ value: item.progress, total: 100, type: ProgressType.Linear })
-              .color('#88BFD8')
-              .backgroundColor('#242B35')
-            Text('继续阅读后，进度会作为下一次推荐上下文')
-              .fontColor('#697382')
-              .fontSize(12)
-          }
-          .layoutWeight(1)
-        }
-        .width('100%')
-        .padding(14)
-        .backgroundColor('#121821')
-        .borderRadius(8)
-      }, (item: PlanItem) => `${item.id}`)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  ProfileView() {
-    Column({ space: 16 }) {
-      this.SectionHeader('我的画像', '推荐会读取专业、兴趣、目标和预算')
-      Column({ space: 10 }) {
-        Row({ space: 10 }) {
-          this.ProfileInput('姓名', this.profile.name, 0)
-          this.ProfileInput('专业', this.profile.major, 1)
-        }
-        TextInput({ placeholder: '兴趣标签', text: this.profile.interests })
-          .height(44)
-          .fontColor('#F5F7FA')
-          .backgroundColor('#0F141C')
-          .borderRadius(8)
-          .padding({ left: 12, right: 12 })
-          .onChange((value: string) => {
-            this.profile.interests = value;
-          })
-        TextInput({ placeholder: '阅读目标', text: this.profile.goal })
-          .height(44)
-          .fontColor('#F5F7FA')
-          .backgroundColor('#0F141C')
-          .borderRadius(8)
-          .padding({ left: 12, right: 12 })
-          .onChange((value: string) => {
-            this.profile.goal = value;
-          })
-        Button('保存画像')
-          .width('100%')
-          .height(46)
-          .fontColor('#081019')
-          .backgroundColor('#D9B46E')
-          .borderRadius(8)
-          .onClick(() => this.saveProfile())
-      }
-      .padding(16)
-      .backgroundColor('#121821')
-      .borderRadius(8)
-
-      this.SectionHeader('收藏', `${this.favorites.length} 本已收藏`)
-      if (this.favorites.length === 0) {
-        this.EmptyState('点击图书详情里的收藏，书籍会出现在这里')
-      }
-      ForEach(this.favorites.slice(0, 3), (book: Book) => {
-        this.BookCard(book)
-      }, (book: Book) => `${book.id}`)
-
-      this.SectionHeader('笔记', `${this.notes.length} 条伴读沉淀`)
-      if (this.notes.length === 0) {
-        this.EmptyState('保存伴读回答后会出现在这里')
-      }
-      ForEach(this.notes.slice(0, 5), (note: NoteItem) => {
-        Text(note.content)
-          .fontColor('#B7C0CC')
-          .fontSize(14)
-          .lineHeight(21)
-          .padding(14)
-          .backgroundColor('#121821')
-          .borderRadius(8)
-      }, (note: NoteItem) => `${note.id}`)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  FeaturedBook(book: Book) {
-    Column({ space: 8 }) {
-      this.CoverArt(book, 112, 154, 12)
-      Text(book.title)
-        .fontColor('#F5F7FA')
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .maxLines(2)
-      Text(book.difficulty)
-        .fontColor('#D9B46E')
-        .fontSize(11)
-    }
-    .width(118)
-    .onClick(() => this.openBook(book))
-  }
-
-  @Builder
-  BookCard(book: Book) {
-    Row({ space: 14 }) {
-      this.CoverArt(book, 82, 116, 10)
-      Column({ space: 8 }) {
-        Row() {
-          Text(book.title)
-            .fontColor('#F5F7FA')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .maxLines(1)
-            .layoutWeight(1)
-          Text(book.difficulty)
-            .fontColor('#D9B46E')
-            .fontSize(12)
-            .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-            .backgroundColor('#211D14')
-            .borderRadius(8)
-        }
-        Text(book.author)
-          .fontColor('#7D8794')
-          .fontSize(12)
-          .maxLines(1)
-        Text(book.summary)
-          .fontColor('#B7C0CC')
-          .fontSize(13)
-          .lineHeight(19)
-          .maxLines(2)
-        Row({ space: 8 }) {
-          Button('详情')
-            .height(32)
-            .fontSize(12)
-            .fontColor('#F5F7FA')
-            .backgroundColor('#202733')
-            .borderRadius(8)
-            .onClick(() => this.openBook(book))
-          Button('计划')
-            .height(32)
-            .fontSize(12)
-            .fontColor('#081019')
-            .backgroundColor('#88BFD8')
-            .borderRadius(8)
-            .onClick(() => this.addPlan(book.id))
-        }
-      }
-      .layoutWeight(1)
-    }
-    .width('100%')
-    .padding(14)
-    .backgroundColor('#121821')
-    .border({ width: 1, color: '#202A36' })
-    .borderRadius(8)
-    .onClick(() => this.openBook(book))
-  }
-
-  @Builder
-  RecommendCard(item: RecommendationBook) {
-    Row({ space: 14 }) {
-      this.CoverById(item.id, 72, 102, item.title, item.difficulty, 9)
-      Column({ space: 8 }) {
-        Row() {
-          Text(item.title)
-            .fontColor('#F5F7FA')
-            .fontSize(17)
-            .fontWeight(FontWeight.Bold)
-            .layoutWeight(1)
-            .maxLines(1)
-          Text(item.difficulty)
-            .fontColor('#D9B46E')
-            .fontSize(12)
-        }
-        Text(item.reason)
-          .fontColor('#B7C0CC')
-          .fontSize(13)
-          .lineHeight(20)
-          .maxLines(3)
-        Row({ space: 8 }) {
-          Button('进入图书')
-            .height(34)
-            .fontColor('#F5F7FA')
-            .backgroundColor('#202733')
-            .borderRadius(8)
-            .onClick(() => this.openBookById(item.id))
-          Button('加入计划')
-            .height(34)
-            .fontColor('#081019')
-            .backgroundColor('#88BFD8')
-            .borderRadius(8)
-            .onClick(() => this.addPlan(item.id))
-        }
-      }
-      .layoutWeight(1)
-    }
-    .padding(14)
-    .backgroundColor('#121821')
-    .borderRadius(8)
-  }
-
-  @Builder
-  CoverArt(book: Book, widthValue: number, heightValue: number, titleSize: number) {
-    this.CoverById(book.id, widthValue, heightValue, book.title, book.difficulty, titleSize)
-  }
-
-  @Builder
-  CoverById(bookId: number, widthValue: number, heightValue: number, title: string, difficulty: string, titleSize: number) {
+  ShelfSelectionBadge(selected: boolean) {
     Stack() {
-      if (bookId === 1) {
-        Image($r('app.media.cover_ai_modern')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else if (bookId === 2) {
-        Image($r('app.media.cover_machine_learning')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else if (bookId === 3) {
-        Image($r('app.media.cover_deep_learning')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else if (bookId === 4) {
-        Image($r('app.media.cover_algorithm')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else if (bookId === 5) {
-        Image($r('app.media.cover_english')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else if (bookId === 6) {
-        Image($r('app.media.cover_classic')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else if (bookId === 7 || bookId === 9) {
-        Image($r('app.media.cover_system')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      } else {
-        Image($r('app.media.cover_design')).width('100%').height('100%').objectFit(ImageFit.Cover)
-      }
-      Column() {
-        Blank()
-        Text(title)
-          .fontColor('#F5F7FA')
-          .fontSize(titleSize)
+      Circle()
+        .width(22)
+        .height(22)
+        .fill(selected ? Theme.mobileBlue : Theme.mobileSurface)
+        .border({ width: 1, color: selected ? Theme.mobileBlue : '#C7CDD9' })
+      if (selected) {
+        Text('√')
+          .fontColor(Theme.mobileSurface)
+          .fontSize(12)
           .fontWeight(FontWeight.Bold)
-          .maxLines(2)
-          .lineHeight(titleSize + 3)
-        Text(difficulty)
-          .fontColor('#D9B46E')
-          .fontSize(10)
-          .margin({ top: 4 })
+      }
+    }
+    .width(22)
+    .height(22)
+  }
+
+  @Builder
+  ShelfPage() {
+    Column({ space: this.sectionGap() }) {
+      Row({ space: 12 }) {
+        Text('书架')
+          .fontColor(Theme.mobileText)
+          .fontSize(this.titleSize())
+          .fontWeight(FontWeight.Bold)
+
+        Row({ space: 10 }) {
+          Image($r('app.media.discover_search'))
+            .width(22)
+            .height(22)
+          Text('搜索书名 / 作者')
+            .fontColor('#8C92A5')
+            .fontSize(this.isCompact() ? 15 : 16)
+          Blank()
+        }
+        .layoutWeight(1)
+        .height(this.isCompact() ? 48 : 52)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor(Theme.mobileSurface)
+        .borderRadius(26)
+        .shadow({ radius: 16, color: '#18000000', offsetX: 0, offsetY: 8 })
+
+        this.CircleActionButton($r('app.media.mobile_more_circle'))
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Row() {
+        this.TopTextTab('继续阅读', true, Theme.mobileRed)
+        this.TopTextTab('浏览记录', false, Theme.mobileBlue)
+        Blank()
+        Text('管理')
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(16)
+        this.HeaderDivider()
+        Text('编辑')
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(16)
       }
       .width('100%')
-      .height('100%')
-      .padding(10)
-      .backgroundColor('#33000000')
+      .alignItems(VerticalAlign.Bottom)
+
+      ForEach(SHELF_BOOKS, (book: ShelfBook) => {
+        this.ShelfBookCard(book)
+      }, (book: ShelfBook) => `${book.id}`)
+
+      this.ImportCard()
+    }
+    .width('100%')
+  }
+
+  @Builder
+  StorePage() {
+    Column({ space: this.sectionGap() }) {
+      Row({ space: 12 }) {
+        Text('书城')
+          .fontColor(Theme.mobileText)
+          .fontSize(this.titleSize())
+          .fontWeight(FontWeight.Bold)
+
+        Row({ space: 10 }) {
+          Image($r('app.media.discover_search'))
+            .width(22)
+            .height(22)
+          Text('搜索书名 / 作者 / 关键词')
+            .fontColor('#B0B4C1')
+            .fontSize(this.isCompact() ? 15 : 16)
+          Blank()
+        }
+        .layoutWeight(1)
+        .height(this.isCompact() ? 48 : 52)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor(Theme.mobileSurface)
+        .border({ width: 1, color: Theme.mobileLine })
+        .borderRadius(26)
+
+        this.CircleActionButton($r('app.media.mobile_cart'))
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: this.isCompact() ? 20 : 24 }) {
+        this.TopTextTab('精选', true, Theme.mobileBlue)
+        this.TopTextTab('男生', false, Theme.mobileBlue)
+        this.TopTextTab('女生', false, Theme.mobileBlue)
+        this.TopTextTab('出版', false, Theme.mobileBlue)
+        this.TopTextTab('听书', false, Theme.mobileBlue)
+        this.TopTextTab('漫画', false, Theme.mobileBlue)
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Start)
+      .alignItems(VerticalAlign.Bottom)
+
+      Column({ space: 18 }) {
+        Row({ space: 14 }) {
+          Stack() {
+            Circle()
+              .width(44)
+              .height(44)
+              .fill(Theme.mobileSurface)
+            Text('AI')
+              .fontColor(Theme.mobileText)
+              .fontSize(15)
+              .fontWeight(FontWeight.Bold)
+          }
+          .shadow({ radius: 14, color: '#15000000', offsetX: 0, offsetY: 6 })
+
+          Row() {
+            Text('你好！我是你的阅读助手，\n有什么书籍推荐或阅读问题可以问我～')
+              .fontColor(Theme.mobileText)
+              .fontSize(this.isCompact() ? 17 : 18)
+              .fontWeight(FontWeight.Medium)
+              .lineHeight(this.isCompact() ? 26 : 28)
+          }
+          .layoutWeight(1)
+          .padding({ left: 18, right: 18, top: 16, bottom: 16 })
+          .backgroundColor(Theme.mobileSurface)
+          .borderRadius(20)
+          .shadow({ radius: 16, color: '#18000000', offsetX: 0, offsetY: 8 })
+        }
+        .alignItems(VerticalAlign.Center)
+
+        Text('今天想读点什么？')
+          .fontColor(Theme.mobileText)
+          .fontSize(this.isCompact() ? 17 : 18)
+          .fontWeight(FontWeight.Medium)
+
+        Row({ space: 10 }) {
+          Text('输入书名、作者或关键词...')
+            .fontColor('#C0C4D0')
+            .fontSize(this.isCompact() ? 16 : 17)
+          Blank()
+          Stack() {
+            Circle()
+              .width(32)
+              .height(32)
+              .fill('#D2D4DB')
+            Text('↑')
+              .fontColor(Theme.mobileSurface)
+              .fontSize(18)
+              .fontWeight(FontWeight.Medium)
+          }
+        }
+        .width('100%')
+        .height(this.isCompact() ? 78 : 84)
+        .padding({ left: 18, right: 16 })
+        .backgroundColor(Theme.mobileSurface)
+        .border({ width: 1, color: Theme.mobileLine })
+        .borderRadius(18)
+      }
+      .width('100%')
+      .padding(16)
+      .backgroundColor(Theme.mobileSurface)
+      .borderRadius(24)
+      .shadow({ radius: 20, color: '#18000000', offsetX: 0, offsetY: 10 })
+
+      this.SectionTitle('重磅推荐', '换一批')
+
+      ForEach(STORE_BOOKS, (book: StoreBook) => {
+        this.StoreBookCard(book)
+      }, (book: StoreBook) => `${book.id}`)
+
+      this.StoreOfferCard()
+    }
+    .width('100%')
+  }
+
+  @Builder
+  CategoryPage() {
+    Column({ space: this.sectionGap() }) {
+      Row() {
+        Text('分类')
+          .fontColor(Theme.mobileText)
+          .fontSize(this.titleSize())
+          .fontWeight(FontWeight.Bold)
+        Blank()
+        this.CircleActionButton($r('app.media.discover_search'), false)
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: this.isCompact() ? 20 : 24 }) {
+        ForEach(CATEGORY_TOP_FILTERS, (item: string, index: number) => {
+          this.TopTextTab(item, index === 0, Theme.mobileBlue)
+        }, (item: string) => item)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Bottom)
+
+      Row({ space: 14 }) {
+        Column({ space: 8 }) {
+          ForEach(CATEGORY_SIDE_MENU, (item: string, index: number) => {
+            Row() {
+              if (index === 0) {
+                Blank()
+                  .width(4)
+                  .height(24)
+                  .borderRadius(2)
+                  .backgroundColor(Theme.mobileBlue)
+              } else {
+                Blank()
+                  .width(4)
+                  .height(24)
+              }
+              Text(item)
+                .fontColor(index === 0 ? Theme.mobileBlue : Theme.mobileSubtext)
+                .fontSize(15)
+                .fontWeight(index === 0 ? FontWeight.Medium : FontWeight.Regular)
+                .margin({ left: 10 })
+            }
+            .width('100%')
+            .height(46)
+            .padding({ left: 12, right: 12 })
+            .backgroundColor(index === 0 ? Theme.mobileSurface : Theme.mobileSidebar)
+            .borderRadius(14)
+          }, (item: string) => item)
+        }
+        .width(this.sidebarWidth())
+
+        Column({ space: 18 }) {
+          this.CategoryTitle('按题材')
+          ForEach(CATEGORY_SUBJECT_ROWS, (rowItems: CategorySubject[], index: number) => {
+            Row({ space: 10 }) {
+              this.SubjectTile(rowItems[0])
+              this.SubjectTile(rowItems[1])
+            }
+            .width('100%')
+          }, (rowItems: CategorySubject[], index: number) => `subject-row-${index}`)
+
+          this.CategoryTitle('按风格')
+          this.TagCloud(CATEGORY_STYLE_TAGS)
+
+          this.CategoryTitle('按情节')
+          this.TagCloud(CATEGORY_PLOT_TAGS)
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Top)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  DiscoverPage() {
+    Column({ space: this.sectionGap() }) {
+      Row() {
+        Text('发现')
+          .fontColor(Theme.mobileText)
+          .fontSize(this.titleSize())
+          .fontWeight(FontWeight.Bold)
+        Blank()
+        this.CircleActionButton($r('app.media.discover_search'), false)
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Column({ space: 14 }) {
+        Text('今日推荐')
+          .fontColor(Theme.mobileText)
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+
+        Row({ space: 16 }) {
+          this.BookPlaceholder(78, 108, '#F1EADF', false, false)
+
+          Column({ space: 8 }) {
+            Text('人类简史：从动物到上帝')
+              .fontColor(Theme.mobileText)
+              .fontSize(this.isCompact() ? 20 : 22)
+              .fontWeight(FontWeight.Bold)
+              .maxLines(2)
+            Text('[以色列] 尤瓦尔·赫拉利')
+              .fontColor(Theme.mobileSubtext)
+              .fontSize(13)
+            Text('8.9分')
+              .fontColor(Theme.mobileOrange)
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+            Text('从认知革命、农业革命到科学革命，探索人类如何一步步走到今天。')
+              .fontColor(Theme.mobileSubtext)
+              .fontSize(13)
+              .lineHeight(20)
+              .maxLines(3)
+
+            Row() {
+              Text('立即阅读')
+                .fontColor('#A57B41')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+            }
+            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+            .backgroundColor('#F4E6C7')
+            .borderRadius(12)
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+        }
+      }
+      .width('100%')
+      .padding(16)
+      .backgroundColor('#FFF7EC')
+      .borderRadius(20)
+      .shadow({ radius: 16, color: '#16000000', offsetX: 0, offsetY: 8 })
+
+      Row() {
+        ForEach(DISCOVER_QUICK_ACTIONS, (item: QuickAction) => {
+          this.QuickActionItem(item)
+        }, (item: QuickAction) => `${item.id}`)
+      }
+      .width('100%')
+
+      this.SectionTitle('热门书单', '查看更多')
+      ForEach(DISCOVER_LISTS, (item: DiscoverList) => {
+        this.DiscoverListCard(item)
+      }, (item: DiscoverList) => `${item.id}`)
+
+      this.SectionTitle('热门活动', '查看更多')
+      Column({ space: 10 }) {
+        Image($r('app.media.discover_activity_banner'))
+          .width('100%')
+          .height(this.isCompact() ? 128 : 148)
+          .objectFit(ImageFit.Cover)
+          .borderRadius(18)
+        Row() {
+          Text('万卷共读 · 春日计划')
+            .fontColor(Theme.mobileText)
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+          Blank()
+          Text('立即参与')
+            .fontColor('#9A7B46')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+        }
+      }
+      .width('100%')
+      .padding(14)
+      .backgroundColor(Theme.mobileSurface)
+      .borderRadius(20)
+      .shadow({ radius: 16, color: '#15000000', offsetX: 0, offsetY: 8 })
+
+      this.SectionTitle('猜你喜欢')
+      Row({ space: 12 }) {
+        this.MiniGuessCard('通识阅读', '从经典书单继续探索', '#EEF3FF')
+        this.MiniGuessCard('成长计划', '按阶段挑选适合你的书', '#FFF2EA')
+      }
+      .width('100%')
+    }
+    .width('100%')
+  }
+
+  @Builder
+  ProfilePage() {
+    Column({ space: this.sectionGap() }) {
+      Row({ space: 10 }) {
+        this.IconOnlyButton($r('app.media.mobile_filter'))
+        Row({ space: 6 }) {
+          Circle()
+            .width(8)
+            .height(8)
+            .fill('#91A8FF')
+          Text('校园福利专区')
+            .fontColor(Theme.mobileSubtext)
+            .fontSize(15)
+        }
+        .padding({ left: 12, right: 14, top: 8, bottom: 8 })
+        .backgroundColor('#F2F4FF')
+        .borderRadius(18)
+        Blank()
+        this.IconOnlyButton($r('app.media.profile_moon'))
+        this.NotificationButton()
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: 16 }) {
+        Image($r('app.media.profile_avatar'))
+          .width(88)
+          .height(88)
+          .borderRadius(44)
+        Column({ space: 8 }) {
+          Text('鸿蒙智阅同学')
+            .fontColor(Theme.mobileText)
+            .fontSize(28)
+            .fontWeight(FontWeight.Bold)
+          Row({ space: 8 }) {
+            this.LevelBadge('Lv.6')
+            this.LevelBadge('阅读成长中')
+          }
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        Text('>')
+          .fontColor('#CFD3DE')
+          .fontSize(26)
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Column({ space: 18 }) {
+        Row() {
+          Text('我的账户')
+            .fontColor(Theme.mobileText)
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+          Blank()
+          Text('更多')
+            .fontColor('#B6BAC6')
+            .fontSize(15)
+        }
+
+        Row() {
+          this.AccountStat('12', '阅读积分')
+          this.AccountStat('4', '进行中计划')
+          this.AccountStat('18', '笔记')
+          this.AccountStat('9', '收藏')
+          Column() {
+            Blank()
+            Row() {
+              Text('查看画像')
+                .fontColor(Theme.mobileSurface)
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+            }
+            .padding({ left: 18, right: 18, top: 10, bottom: 10 })
+            .backgroundColor(Theme.mobileRed)
+            .borderRadius(18)
+          }
+          .alignItems(HorizontalAlign.End)
+        }
+        .alignItems(VerticalAlign.Center)
+      }
+      .width('100%')
+      .padding(18)
+      .backgroundColor(Theme.mobileSurface)
+      .borderRadius(24)
+      .shadow({ radius: 18, color: '#18000000', offsetX: 0, offsetY: 10 })
+
+      Row() {
+        Column({ space: 8 }) {
+          Text('阅读成长计划')
+            .fontColor('#8A622A')
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+          Text('开通享受校园伴读、计划提醒和专题推荐权益')
+            .fontColor('#B38A58')
+            .fontSize(13)
+            .maxLines(2)
+        }
+        .layoutWeight(1)
+        Text('立即查看 >')
+          .fontColor('#A27337')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+      }
+      .width('100%')
+      .padding({ left: 18, right: 18, top: 16, bottom: 16 })
+      .backgroundColor('#FFF2D9')
+      .borderRadius(22)
+
+      Column({ space: 14 }) {
+        ForEach(PROFILE_SERVICE_ROWS, (rowItems: ProfileService[], index: number) => {
+          Row({ space: 14 }) {
+            this.ProfileServiceCard(rowItems[0])
+            this.ProfileServiceCard(rowItems[1])
+          }
+          .width('100%')
+        }, (rowItems: ProfileService[], index: number) => `service-${index}`)
+      }
+      .width('100%')
+
+      Column({ space: 18 }) {
+        Row() {
+          ForEach(PROFILE_TOOLS.slice(0, 4), (item: ProfileTool) => {
+            this.ProfileToolItem(item)
+          }, (item: ProfileTool) => item.title)
+        }
+        .width('100%')
+
+        Row() {
+          ForEach(PROFILE_TOOLS.slice(4, 8), (item: ProfileTool) => {
+            this.ProfileToolItem(item)
+          }, (item: ProfileTool) => item.title)
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Circle()
+            .width(8)
+            .height(8)
+            .fill(Theme.mobileRed)
+          Circle()
+            .width(8)
+            .height(8)
+            .fill('#D9DCE5')
+        }
+        .justifyContent(FlexAlign.Center)
+
+        Row({ space: 12 }) {
+          this.BookPlaceholder(52, 52, '#FFF0EC', false, false)
+          Text('阅读计划打卡、笔记沉淀、收藏整理都能在这里继续推进。')
+            .fontColor(Theme.mobileText)
+            .fontSize(14)
+            .lineHeight(22)
+            .layoutWeight(1)
+          Text('>')
+            .fontColor('#CBD0DD')
+            .fontSize(22)
+        }
+        .padding(14)
+        .backgroundColor(Theme.mobileSurfaceSoft)
+        .borderRadius(16)
+      }
+      .width('100%')
+      .padding(18)
+      .backgroundColor(Theme.mobileSurface)
+      .borderRadius(24)
+      .shadow({ radius: 18, color: '#18000000', offsetX: 0, offsetY: 10 })
+
+      Row({ space: 12 }) {
+        this.IconOnlyButton($r('app.media.profile_help'))
+        Text('帮助与反馈')
+          .fontColor(Theme.mobileText)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+        Blank()
+        Text('>')
+          .fontColor('#CBD0DD')
+          .fontSize(22)
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 18, bottom: 18 })
+      .backgroundColor(Theme.mobileSurface)
+      .borderRadius(22)
+      .shadow({ radius: 16, color: '#15000000', offsetX: 0, offsetY: 8 })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  TopTextTab(label: string, selected: boolean, accent: string) {
+    Column({ space: 8 }) {
+      Text(label)
+        .fontColor(selected ? Theme.mobileText : Theme.mobileSubtext)
+        .fontSize(this.isCompact() ? 15 : 16)
+        .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
+      Blank()
+        .width(selected ? 28 : 0)
+        .height(4)
+        .borderRadius(2)
+        .backgroundColor(selected ? accent : Theme.mobileCanvas)
+    }
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  HeaderDivider() {
+    Blank()
+      .width(1)
+      .height(16)
+      .backgroundColor(Theme.mobileLine)
+      .margin({ left: 14, right: 14 })
+  }
+
+  @Builder
+  CircleActionButton(icon: Resource, withShadow: boolean = true) {
+    Stack() {
+      Circle()
+        .width(46)
+        .height(46)
+        .fill(Theme.mobileSurface)
+      Image(icon)
+        .width(22)
+        .height(22)
+    }
+    .width(46)
+    .height(46)
+    .shadow(withShadow ? { radius: 14, color: '#15000000', offsetX: 0, offsetY: 6 } : { radius: 0, color: '#00000000', offsetX: 0, offsetY: 0 })
+  }
+
+  @Builder
+  IconOnlyButton(icon: Resource) {
+    Stack() {
+      Circle()
+        .width(40)
+        .height(40)
+        .fill(Theme.mobileSurface)
+      Image(icon)
+        .width(20)
+        .height(20)
+    }
+    .width(40)
+    .height(40)
+  }
+
+  @Builder
+  NotificationButton() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      this.IconOnlyButton($r('app.media.mobile_bell'))
+      Circle()
+        .width(8)
+        .height(8)
+        .fill(Theme.mobileRed)
+        .margin({ top: 4, right: 4 })
+    }
+  }
+
+  @Builder
+  ShelfBookCard(book: ShelfBook) {
+    Row({ space: 14 }) {
+      this.BookPlaceholder(this.shelfCoverWidth(), this.shelfCoverHeight(), book.coverTone, true, true)
+
+      Column({ space: 10 }) {
+        Row({ space: 12 }) {
+          Column({ space: 8 }) {
+            Text(book.title)
+              .fontColor(Theme.mobileText)
+              .fontSize(this.isCompact() ? 18 : 20)
+              .fontWeight(FontWeight.Bold)
+              .maxLines(2)
+            Row({ space: 10 }) {
+              Text(book.author)
+                .fontColor(Theme.mobileSubtext)
+                .fontSize(14)
+              this.TagPill(book.tag, book.accent)
+            }
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          Row({ space: 6 }) {
+            Text('继续阅读')
+              .fontColor(Theme.mobileRed)
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+            Image($r('app.media.icon_chevron_right'))
+              .width(14)
+              .height(14)
+          }
+          .margin({ top: 4 })
+        }
+        .width('100%')
+
+        Row({ space: 8 }) {
+          Text(`${book.progress}%`)
+            .fontColor(book.accent)
+            .fontSize(this.isCompact() ? 17 : 18)
+            .fontWeight(FontWeight.Bold)
+          this.ProgressBar(book.progress, book.accent)
+          this.MoreDots()
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+
+        Text(book.lastRead)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(14)
+          .maxLines(2)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(24)
+    .shadow({ radius: 18, color: '#18000000', offsetX: 0, offsetY: 10 })
+  }
+
+  @Builder
+  ImportCard() {
+    Row({ space: 14 }) {
+      Stack() {
+        Circle()
+          .width(48)
+          .height(48)
+          .fill('#FFF1F1')
+        Image($r('app.media.mobile_import_book'))
+          .width(24)
+          .height(24)
+      }
+      Column({ space: 6 }) {
+        Text('本地导入书籍')
+          .fontColor(Theme.mobileText)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+        Text('支持 TXT / EPUB / PDF 等格式')
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(14)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Image($r('app.media.icon_chevron_right'))
+        .width(16)
+        .height(16)
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 18, bottom: 18 })
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(22)
+    .shadow({ radius: 16, color: '#16000000', offsetX: 0, offsetY: 8 })
+  }
+
+  @Builder
+  BookPlaceholder(widthValue: number, heightValue: number, tone: string, showRibbon: boolean, strongGlow: boolean) {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        Column()
+          .width(widthValue)
+          .height(heightValue)
+          .backgroundColor(tone)
+          .borderRadius(16)
+          .border({ width: 1, color: '#F0F1F5' })
+
+        Circle()
+          .width(widthValue * 0.72)
+          .height(widthValue * 0.72)
+          .fill(strongGlow ? '#FFFFFF' : '#F9FAFD')
+          .opacity(0.75)
+          .margin({ right: 10, bottom: 10 })
+
+        Column({ space: 7 }) {
+          Blank()
+            .width(widthValue * 0.56)
+            .height(5)
+            .borderRadius(3)
+            .backgroundColor('#FFFFFF')
+            .opacity(0.82)
+          Blank()
+            .width(widthValue * 0.42)
+            .height(5)
+            .borderRadius(3)
+            .backgroundColor('#FFFFFF')
+            .opacity(0.65)
+        }
+        .width(widthValue)
+        .height(heightValue)
+        .justifyContent(FlexAlign.Center)
+        .padding({ left: 14 })
+      }
+
+      if (showRibbon) {
+        Text('在读')
+          .fontColor(Theme.mobileSurface)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor(Theme.mobileRed)
+          .borderRadius({ topLeft: 16, bottomRight: 12 })
+      }
     }
     .width(widthValue)
     .height(heightValue)
-    .borderRadius(8)
-    .clip(true)
   }
 
   @Builder
-  PlanCover(item: PlanItem) {
-    Column() {
-      Text(item.title.substring(0, 1))
-        .fontColor('#F5F7FA')
-        .fontSize(26)
-        .fontWeight(FontWeight.Bold)
-    }
-    .width(62)
-    .height(84)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(item.coverColor || '#182532')
-    .borderRadius(8)
+  TagPill(label: string, accent: string) {
+    Text(label)
+      .fontColor(accent)
+      .fontSize(13)
+      .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+      .backgroundColor('#F7F6FF')
+      .borderRadius(12)
   }
 
   @Builder
-  SourceList() {
-    Column({ space: 8 }) {
-      this.SectionHeader('参考依据', 'AI 回答引用的知识库片段')
-      ForEach(this.sources.slice(0, 3), (source: SourceRef) => {
-        Text(`${source.title} · ${source.source}\n${source.text}`)
-          .fontColor('#9FAAB8')
-          .fontSize(12)
-          .lineHeight(18)
-          .padding(12)
-          .backgroundColor('#0F141C')
-          .borderRadius(8)
-      }, (source: SourceRef) => `${source.chunk_id}`)
-    }
-  }
-
-  @Builder
-  DetailSheet() {
-    Column({ space: 16 }) {
+  ProgressBar(progress: number, accent: string) {
+    Stack({ alignContent: Alignment.Start }) {
       Row() {
-        Text('图书详情')
-          .fontColor('#F5F7FA')
-          .fontSize(22)
-          .fontWeight(FontWeight.Bold)
-        Blank()
-        Button('关闭')
-          .height(34)
-          .fontColor('#B7C0CC')
-          .backgroundColor('#202733')
-          .borderRadius(8)
-          .onClick(() => {
-            this.showDetail = false;
-          })
       }
-      Row({ space: 18 }) {
-        this.CoverArt(this.selectedBook, 124, 174, 13)
-        Column({ space: 8 }) {
-          Text(this.selectedBook.title)
-            .fontColor('#F5F7FA')
-            .fontSize(22)
-            .fontWeight(FontWeight.Bold)
-            .maxLines(2)
-          Text(this.selectedBook.author)
-            .fontColor('#7D8794')
-            .fontSize(13)
-          Text(this.selectedBook.difficulty)
-            .fontColor('#D9B46E')
-            .fontSize(12)
-            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-            .backgroundColor('#211D14')
-            .borderRadius(8)
-          Text(this.selectedBook.tags)
-            .fontColor('#94A0AF')
-            .fontSize(12)
-            .lineHeight(18)
-            .maxLines(2)
+        .width('100%')
+        .height(4)
+        .borderRadius(2)
+        .backgroundColor('#ECEFF6')
+      Row() {
+      }
+        .width(`${progress}%`)
+        .height(4)
+        .borderRadius(2)
+        .backgroundColor(accent)
+    }
+    .layoutWeight(1)
+    .height(4)
+  }
+
+  @Builder
+  MoreDots() {
+    Row({ space: 4 }) {
+      Circle()
+        .width(4)
+        .height(4)
+        .fill('#B8BDCB')
+      Circle()
+        .width(4)
+        .height(4)
+        .fill('#B8BDCB')
+      Circle()
+        .width(4)
+        .height(4)
+        .fill('#B8BDCB')
+    }
+    .margin({ left: 8 })
+  }
+
+  @Builder
+  SectionTitle(title: string, action: string = '') {
+    Row() {
+      Text(title)
+        .fontColor(Theme.mobileText)
+        .fontSize(this.isCompact() ? 26 : 28)
+        .fontWeight(FontWeight.Bold)
+      Blank()
+      if (action) {
+        Row({ space: 6 }) {
+          Text(action)
+            .fontColor(Theme.mobileSubtext)
+            .fontSize(15)
+          if (action === '换一批') {
+            Text('C')
+              .fontColor(Theme.mobileSubtext)
+              .fontSize(17)
+              .fontWeight(FontWeight.Medium)
+          } else {
+            Image($r('app.media.icon_chevron_right'))
+              .width(14)
+              .height(14)
+          }
         }
-        .layoutWeight(1)
-      }
-      Text(this.selectedBook.summary)
-        .fontColor('#B7C0CC')
-        .fontSize(14)
-        .lineHeight(22)
-      Text(`适合人群：${this.selectedBook.targetReader}`)
-        .fontColor('#8994A3')
-        .fontSize(13)
-        .lineHeight(20)
-      Row({ space: 10 }) {
-        Button('收藏')
-          .layoutWeight(1)
-          .height(44)
-          .fontColor('#F5F7FA')
-          .backgroundColor('#202733')
-          .borderRadius(8)
-          .onClick(() => this.addFavorite(this.selectedBook.id))
-        Button('AI 伴读')
-          .layoutWeight(1)
-          .height(44)
-          .fontColor('#081019')
-          .backgroundColor('#88BFD8')
-          .borderRadius(8)
-          .onClick(() => {
-            this.showDetail = false;
-            this.showChat = true;
-          })
-      }
-      Row({ space: 10 }) {
-        Button('加入计划')
-          .layoutWeight(1)
-          .height(44)
-          .fontColor('#081019')
-          .backgroundColor('#D9B46E')
-          .borderRadius(8)
-          .onClick(() => this.addPlan(this.selectedBook.id))
-        Button('查馆藏')
-          .layoutWeight(1)
-          .height(44)
-          .fontColor('#F5F7FA')
-          .backgroundColor('#202733')
-          .borderRadius(8)
-          .onClick(() => {
-            this.showDetail = false;
-            this.openCommerce(this.selectedBook);
-          })
       }
     }
     .width('100%')
-    .height('84%')
-    .padding(20)
-    .backgroundColor('#101620')
-    .borderRadius({ topLeft: 16, topRight: 16 })
-    .position({ x: 0, y: '16%' })
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
-  ChatSheet() {
-    Column({ space: 12 }) {
-      Row() {
-        Text('AI 伴读')
-          .fontColor('#F5F7FA')
-          .fontSize(22)
+  StoreBookCard(book: StoreBook) {
+    Row({ space: 16 }) {
+      this.BookPlaceholder(82, 118, book.coverTone, false, false)
+
+      Column({ space: 8 }) {
+        Text(book.title)
+          .fontColor(Theme.mobileText)
+          .fontSize(this.isCompact() ? 18 : 20)
           .fontWeight(FontWeight.Bold)
-        Blank()
-        Button('关闭')
-          .height(34)
-          .fontColor('#B7C0CC')
-          .backgroundColor('#202733')
-          .borderRadius(8)
-          .onClick(() => {
-            this.showChat = false;
-          })
-      }
-      Row({ space: 12 }) {
-        this.CoverArt(this.selectedBook, 64, 90, 9)
-        Column({ space: 6 }) {
-          Text(this.selectedBook.title)
-            .fontColor('#F5F7FA')
-            .fontSize(17)
-            .fontWeight(FontWeight.Bold)
-            .maxLines(1)
-          Text('问题会围绕本项目知识库片段回答')
-            .fontColor('#7D8794')
-            .fontSize(12)
-        }
-        .layoutWeight(1)
-      }
-      TextInput({ placeholder: '围绕这本书提问', text: this.chatQuestion })
-        .height(46)
-        .fontColor('#F5F7FA')
-        .backgroundColor('#0F141C')
-        .borderRadius(8)
-        .padding({ left: 12, right: 12 })
-        .onChange((value: string) => {
-          this.chatQuestion = value;
-        })
-      Button('提问')
-        .width('100%')
-        .height(44)
-        .fontColor('#081019')
-        .backgroundColor('#88BFD8')
-        .borderRadius(8)
-        .onClick(() => this.askBook())
-      if (this.chatAnswer) {
-        Text(this.chatAnswer)
-          .fontColor('#F5F7FA')
+          .maxLines(2)
+        Text(book.author)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(15)
+        Text(book.score)
+          .fontColor(Theme.mobileOrange)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+        Text(book.quote)
+          .fontColor(Theme.mobileSubtext)
           .fontSize(14)
           .lineHeight(22)
-          .padding(14)
-          .backgroundColor('#121821')
-          .borderRadius(8)
-        Button('保存为笔记')
-          .height(42)
-          .fontColor('#081019')
-          .backgroundColor('#D9B46E')
-          .borderRadius(8)
-          .onClick(() => this.saveChatNote())
-        this.SourceList()
+          .maxLines(book.tags ? 2 : 3)
+
+        if (book.tags && book.tags.length > 0) {
+          Row({ space: 8 }) {
+            ForEach(book.tags, (tag: string) => {
+              Text(tag)
+                .fontColor(Theme.mobileSubtext)
+                .fontSize(13)
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor('#F4F5F8')
+                .borderRadius(12)
+            }, (tag: string) => tag)
+          }
+        }
       }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .height('78%')
-    .padding(20)
-    .backgroundColor('#101620')
-    .borderRadius({ topLeft: 16, topRight: 16 })
-    .position({ x: 0, y: '22%' })
+    .padding({ left: 8, right: 8, top: 4, bottom: 4 })
   }
 
   @Builder
-  CommerceSheet() {
-    Column({ space: 12 }) {
+  StoreOfferCard() {
+    Column({ space: 16 }) {
       Row() {
-        Text('购书 / 馆藏')
-          .fontColor('#F5F7FA')
-          .fontSize(22)
+        Text('今日限时特惠')
+          .fontColor('#7C4A1F')
+          .fontSize(20)
           .fontWeight(FontWeight.Bold)
         Blank()
-        Button('关闭')
-          .height(34)
-          .fontColor('#B7C0CC')
-          .backgroundColor('#202733')
-          .borderRadius(8)
-          .onClick(() => {
-            this.showCommerce = false;
-          })
-      }
-      ForEach(this.commerceResults, (item: CommerceResult) => {
-        Row({ space: 12 }) {
-          Column({ space: 4 }) {
-            Text(item.platform)
-              .fontColor('#F5F7FA')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-            Text(`${item.status} · ${item.delivery}`)
-              .fontColor('#7D8794')
-              .fontSize(12)
-              .maxLines(2)
-          }
-          .layoutWeight(1)
-          Text(`¥${item.price}`)
-            .fontColor('#D9B46E')
-            .fontSize(17)
-            .fontWeight(FontWeight.Bold)
-          Button(item.platform === 'library' ? '预约' : '确认')
-            .height(34)
-            .fontColor('#081019')
-            .backgroundColor('#88BFD8')
-            .borderRadius(8)
-            .onClick(() => this.confirm(item))
+        Row({ space: 6 }) {
+          Text('剩余')
+            .fontColor('#B98A5A')
+            .fontSize(14)
+          this.TimerBox('08')
+          Text(':')
+            .fontColor('#A07346')
+            .fontSize(16)
+          this.TimerBox('36')
+          Text(':')
+            .fontColor('#A07346')
+            .fontSize(16)
+          this.TimerBox('45')
         }
-        .padding(14)
-        .backgroundColor('#121821')
-        .borderRadius(8)
-      }, (item: CommerceResult) => `${item.platform}`)
-    }
-    .width('100%')
-    .height('62%')
-    .padding(20)
-    .backgroundColor('#101620')
-    .borderRadius({ topLeft: 16, topRight: 16 })
-    .position({ x: 0, y: '38%' })
-  }
+      }
 
-  @Builder
-  TabBar() {
-    Row() {
-      ForEach(['首页', '搜索', '计划', '我的'], (item: string, index: number) => {
-        Column({ space: 3 }) {
-          Text(item)
-            .fontColor(this.activeTab === index ? '#88BFD8' : '#7D8794')
-            .fontSize(13)
-            .fontWeight(this.activeTab === index ? FontWeight.Bold : FontWeight.Regular)
-          Blank()
-            .width(this.activeTab === index ? 18 : 0)
-            .height(3)
-            .backgroundColor('#88BFD8')
-            .borderRadius(2)
+      Row({ space: 16 }) {
+        this.BookPlaceholder(86, 110, '#FFE7D5', false, false)
+
+        Column({ space: 10 }) {
+          Text('时间的玫瑰（全集）')
+            .fontColor(Theme.mobileText)
+            .fontSize(this.isCompact() ? 20 : 22)
+            .fontWeight(FontWeight.Bold)
+          Text('但德')
+            .fontColor(Theme.mobileSubtext)
+            .fontSize(15)
+          Row({ space: 10 }) {
+            Text('¥19.99')
+              .fontColor(Theme.mobileOrange)
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+            Text('¥59.99')
+              .fontColor('#C1B5B0')
+              .fontSize(16)
+              .decoration({ type: TextDecorationType.LineThrough, color: '#C1B5B0' })
+          }
         }
         .layoutWeight(1)
-        .height(58)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.activeTab = index;
-          if (index === 2) {
-            this.loadPlans();
-          }
-          if (index === 3) {
-            this.loadProfile();
-          }
-        })
-      })
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, bottom: 10 })
-    .backgroundColor('#0F131A')
-  }
-
-  @Builder
-  SectionHeader(title: string, caption: string) {
-    Row() {
-      Column({ space: 3 }) {
-        Text(title)
-          .fontColor('#F5F7FA')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-        Text(caption)
-          .fontColor('#707B8A')
-          .fontSize(12)
+        .alignItems(HorizontalAlign.Start)
       }
-      Blank()
+      .width('100%')
     }
     .width('100%')
+    .padding(16)
+    .backgroundColor('#FFF4EC')
+    .borderRadius(22)
   }
 
   @Builder
-  MetricCard(label: string, value: string, color: string) {
-    Column({ space: 6 }) {
-      Text(label)
-        .fontColor('#7D8794')
-        .fontSize(12)
-      Text(value)
-        .fontColor(color)
-        .fontSize(16)
-        .fontWeight(FontWeight.Bold)
+  TimerBox(text: string) {
+    Text(text)
+      .fontColor('#865325')
+      .fontSize(15)
+      .fontWeight(FontWeight.Medium)
+      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      .backgroundColor(Theme.mobileSurface)
+      .borderRadius(10)
+  }
+
+  @Builder
+  CategoryTitle(title: string) {
+    Text(title)
+      .fontColor(Theme.mobileText)
+      .fontSize(20)
+      .fontWeight(FontWeight.Bold)
+  }
+
+  @Builder
+  SubjectTile(subject: CategorySubject) {
+    Row({ space: 10 }) {
+      this.BookPlaceholder(this.isCompact() ? 34 : 38, this.isCompact() ? 42 : 46, subject.coverTone, false, false)
+      Text(subject.title)
+        .fontColor(Theme.mobileText)
+        .fontSize(this.isCompact() ? 14 : 15)
+        .fontWeight(FontWeight.Medium)
         .maxLines(1)
     }
     .layoutWeight(1)
-    .padding(14)
-    .backgroundColor('#121821')
-    .borderRadius(8)
+    .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(14)
   }
 
   @Builder
-  ProfileInput(placeholder: string, value: string, type: number) {
-    TextInput({ placeholder, text: value })
+  TagCloud(tags: string[]) {
+    Flex({ wrap: FlexWrap.Wrap }) {
+      ForEach(tags, (tag: string) => {
+        Text(tag)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(13)
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .backgroundColor(Theme.mobileSurface)
+          .borderRadius(12)
+          .margin({ right: 10, bottom: 10 })
+      }, (tag: string) => tag)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  QuickActionItem(item: QuickAction) {
+    Column({ space: 10 }) {
+      Image(item.icon)
+        .width(this.isCompact() ? 46 : 50)
+        .height(this.isCompact() ? 46 : 50)
+      Text(item.label)
+        .fontColor(Theme.mobileSubtext)
+        .fontSize(14)
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  DiscoverListCard(item: DiscoverList) {
+    Row({ space: 14 }) {
+      this.BookPlaceholder(68, 90, item.coverTone, false, false)
+
+      Column({ space: 6 }) {
+        Text(item.title)
+          .fontColor(Theme.mobileText)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+        Text(item.count)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(13)
+        Text(item.saved)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(13)
+      }
       .layoutWeight(1)
-      .height(44)
-      .fontColor('#F5F7FA')
-      .backgroundColor('#0F141C')
-      .borderRadius(8)
-      .padding({ left: 12, right: 12 })
-      .onChange((next: string) => {
-        if (type === 0) {
-          this.profile.name = next;
-        } else {
-          this.profile.major = next;
-        }
-      })
+      .alignItems(HorizontalAlign.Start)
+
+      Row() {
+        Text('收藏')
+          .fontColor(Theme.mobileBlue)
+          .fontSize(13)
+      }
+      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+      .border({ width: 1, color: '#DCE6FF' })
+      .borderRadius(14)
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(18)
+    .shadow({ radius: 12, color: '#10000000', offsetX: 0, offsetY: 4 })
   }
 
   @Builder
-  StatusPill(text: string, color: string) {
-    Text(text)
-      .fontColor('#F5F7FA')
-      .fontSize(12)
-      .lineHeight(18)
-      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
-      .backgroundColor(color)
-      .borderRadius(8)
-      .width('100%')
+  MiniGuessCard(title: string, subtitle: string, tone: string) {
+    Column({ space: 12 }) {
+      this.BookPlaceholder(90, 60, tone, false, false)
+      Text(title)
+        .fontColor(Theme.mobileText)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+      Text(subtitle)
+        .fontColor(Theme.mobileSubtext)
+        .fontSize(13)
+        .lineHeight(20)
+        .maxLines(2)
+    }
+    .layoutWeight(1)
+    .padding(14)
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(18)
+    .shadow({ radius: 12, color: '#10000000', offsetX: 0, offsetY: 4 })
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder
-  EmptyState(text: string) {
+  LevelBadge(text: string) {
     Text(text)
-      .fontColor('#7D8794')
-      .fontSize(14)
-      .padding(18)
-      .backgroundColor('#121821')
-      .borderRadius(8)
-      .width('100%')
+      .fontColor('#7A7E8B')
+      .fontSize(13)
+      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+      .backgroundColor('#F2F3F7')
+      .borderRadius(10)
+  }
+
+  @Builder
+  AccountStat(value: string, label: string) {
+    Column({ space: 8 }) {
+      Text(value)
+        .fontColor(Theme.mobileText)
+        .fontSize(this.isCompact() ? 24 : 28)
+        .fontWeight(FontWeight.Bold)
+      Text(label)
+        .fontColor(Theme.mobileSubtext)
+        .fontSize(14)
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  ProfileServiceCard(item: ProfileService) {
+    Row({ space: 12 }) {
+      Image(item.icon)
+        .width(42)
+        .height(42)
+      Column({ space: 5 }) {
+        Text(item.title)
+          .fontColor(Theme.mobileText)
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+        Text(item.subtitle)
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(13)
+          .lineHeight(20)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .layoutWeight(1)
+    .padding(16)
+    .backgroundColor(Theme.mobileSurface)
+    .borderRadius(22)
+    .shadow({ radius: 14, color: '#12000000', offsetX: 0, offsetY: 6 })
+  }
+
+  @Builder
+  ProfileToolItem(item: ProfileTool) {
+    Column({ space: 10 }) {
+      Image(item.icon)
+        .width(28)
+        .height(28)
+      Text(item.title)
+        .fontColor(Theme.mobileText)
+        .fontSize(14)
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  BottomTabs() {
+    Row() {
+      this.BottomTabItem(0, '书架')
+      this.BottomTabItem(1, '书城')
+      this.BottomTabItem(2, '分类')
+      this.BottomTabItem(3, '发现')
+      this.BottomTabItem(4, '我的')
+    }
+    .width('100%')
+    .padding({
+      left: this.isCompact() ? 10 : 12,
+      right: this.isCompact() ? 10 : 12,
+      top: 10,
+      bottom: this.isCompact() ? 10 : 14,
+    })
+    .backgroundColor(Theme.mobileSurface)
+    .border({ width: 1, color: '#EFF1F5' })
+  }
+
+  @Builder
+  BottomTabItem(index: number, label: string) {
+    Column({ space: 6 }) {
+      Image(this.tabIcon(index))
+        .width(26)
+        .height(26)
+      Text(label)
+        .fontColor(this.activeTab === index ? this.tabAccent(index) : '#9197AA')
+        .fontSize(12)
+        .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Regular)
+    }
+    .layoutWeight(1)
+    .height(52)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => {
+      this.activeTab = index;
+      if (index === 0) {
+        this.shelfRefreshSeed++;
+      }
+    })
   }
 }

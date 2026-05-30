@@ -32,6 +32,55 @@ export interface SourceRef {
   text: string;
 }
 
+export interface ReadingChapter {
+  id: string;
+  chapterId?: string;
+  bookId: number;
+  title: string;
+  order: number;
+  summary: string;
+  pageCount: number;
+  isCurrent?: boolean;
+}
+
+export interface ReadingContent {
+  bookId: number;
+  chapterId: string;
+  chapterTitle: string;
+  content: string;
+  paragraphs: string[];
+  sources?: SourceRef[];
+  sourceRefs: SourceRef[];
+}
+
+export interface ReadingProgress {
+  planId: number;
+  bookId: number;
+  chapterId: string;
+  progress: number;
+  scrollOffset: number;
+  status: string;
+  updatedAt?: string;
+}
+
+export interface BookmarkItem {
+  id: number;
+  bookId: number;
+  chapterId: string;
+  title: string;
+  excerpt: string;
+  createdAt: string;
+}
+
+export interface ReaderBundle {
+  book: Book;
+  plan: PlanItem | null;
+  chapters: ReadingChapter[];
+  content: ReadingContent | null;
+  progress: ReadingProgress | null;
+  bookmarks: BookmarkItem[];
+}
+
 export interface CommerceResult {
   platform: string;
   price: number;
@@ -79,7 +128,16 @@ export interface ProfileBundle {
   favorites: Book[];
   notes: NoteItem[];
   plans: PlanItem[];
-  chat_records: object[];
+  chat_records: ChatRecord[];
+}
+
+export interface ChatRecord {
+  id: number;
+  bookId: number;
+  question: string;
+  answer: string;
+  createdAt: string;
+  sourceCount?: number;
 }
 
 export function emptyBook(): Book {
@@ -106,5 +164,16 @@ export function emptyProfile(): UserProfile {
     goal: '课程拓展与竞赛入门',
     budget: 80,
     channels: 'library,jd,dangdang,second_hand',
+  };
+}
+
+export function emptyReaderBundle(): ReaderBundle {
+  return {
+    book: emptyBook(),
+    plan: null,
+    chapters: [],
+    content: null,
+    progress: null,
+    bookmarks: [],
   };
 }
