@@ -25,6 +25,7 @@ oh_modules/
 **/oh_modules/
 .idea/
 *.iml
+.worktrees/
 
 # Node / package managers
 node_modules/
