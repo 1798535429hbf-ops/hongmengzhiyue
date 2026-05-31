@@ -1,0 +1,91 @@
+# ============================================================
+# 鸿蒙智阅 Docker Compose 一键启动
+# 前置: 安装 Docker Desktop，复制 .env.example 为 .env 并填入 DEEPSEEK_API_KEY
+# 启动: docker compose up -d
+# 停止: docker compose down
+# ============================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: hongmeng-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-hongmeng123}
+      MYSQL_DATABASE: hongmeng_zhiyue
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --init-connect=SET NAMES utf8mb4
+      - --skip-character-set-client-handshake
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./backend/src/main/resources/data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - ./mysql/utf8mb4.cnf:/etc/mysql/conf.d/utf8mb4.cnf
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-hongmeng123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    networks:
+      - hongmeng-network
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: hongmeng-ai
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-hongmeng123}
+      MYSQL_DATABASE: hongmeng_zhiyue
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+    ports:
+      - "${AI_SERVICE_PORT:-8001}:8001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - hongmeng-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hongmeng-backend
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8081
+      MYSQL_URL: jdbc:mysql://mysql:3306/hongmeng_zhiyue?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-hongmeng123}
+      AI_SERVICE_BASE_URL: http://ai-service:8001
+      SPRING_SQL_INIT_MODE: never
+    ports:
+      - "${BACKEND_PORT:-8081}:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    networks:
+      - hongmeng-network
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  hongmeng-network:
+    driver: bridge

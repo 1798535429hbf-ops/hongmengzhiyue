@@ -1,0 +1,11 @@
+<svg width="108" height="132" viewBox="0 0 108 132" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="108" height="132" rx="6" fill="#0D2D62"/>
+  <path d="M12 78C37 42 64 40 93 77" stroke="#75D9FF" stroke-width="7" stroke-linecap="round"/>
+  <path d="M20 83C43 63 63 61 86 83" stroke="#FFFFFF" stroke-opacity=".7" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="75" cy="34" r="18" fill="#55B8FF" opacity=".65"/>
+  <circle cx="29" cy="32" r="2" fill="#FFFFFF"/>
+  <circle cx="47" cy="20" r="1.8" fill="#FFFFFF"/>
+  <circle cx="90" cy="63" r="2" fill="#FFFFFF"/>
+  <path d="M19 104H89M30 115H75" stroke="#A8E6FF" stroke-width="4" stroke-linecap="round"/>
+  <text x="34" y="70" fill="#FFFFFF" font-size="18" font-family="serif" font-weight="700">飞舟</text>
+</svg>
