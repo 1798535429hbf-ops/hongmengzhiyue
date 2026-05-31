@@ -42,6 +42,7 @@ public class SmartReadService {
         enriched.put("user_profile", repository.findProfile(userId));
         if (bookId > 0) {
             enriched.put("book", repository.getBook(bookId));
+            enriched.put("sources", repository.findChunks(question, bookId, 6));
         }
         Map<String, Object> result = aiGateway.chat(enriched);
         repository.saveChat(userId, bookId, question,
@@ -122,10 +123,19 @@ public class SmartReadService {
     }
 
     public Map<String, Object> updatePlan(long planId, Map<String, Object> payload) {
+        long bookId = Payloads.number(payload, "book_id", 0L);
         int progress = Payloads.integer(payload, "progress", 0);
-        String status = Payloads.text(payload, "status", progress >= 100 ? "done" : "active");
-        repository.updatePlan(planId, progress, status);
-        return Map.of("id", planId, "progress", progress, "status", status);
+        String chapterId = Payloads.text(payload, "chapter_id", "");
+        int scrollOffset = Payloads.integer(payload, "scroll_offset", 0);
+        String status = Payloads.text(payload, "status", progress >= 100 ? "finished" : "reading");
+        repository.updatePlan(planId, progress, status, chapterId, scrollOffset);
+        return Map.of(
+                "planId", planId,
+                "bookId", bookId,
+                "chapterId", chapterId,
+                "progress", progress,
+                "scrollOffset", scrollOffset,
+                "status", status);
     }
 
     public Map<String, Object> createNote(Map<String, Object> payload) {

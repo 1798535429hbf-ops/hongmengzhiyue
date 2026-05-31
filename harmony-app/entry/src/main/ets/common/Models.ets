@@ -14,6 +14,30 @@ export interface Book {
   difficulty: string;
   targetReader: string;
   coverColor: string;
+  sourceType?: string;
+  readable?: number | boolean;
+  importStatus?: string;
+  sourceNote?: string;
+  chapterCount?: number;
+  rating?: number;
+  ratingCount?: number;
+  wordCount?: number;
+  readerCount?: number;
+  translator?: string;
+  editionNote?: string;
+  catalogVolumes?: CatalogVolume[];
+}
+
+export interface CatalogVolume {
+  id: string;
+  title: string;
+  chapterCount?: number;
+}
+
+export interface VolumeItem {
+  id: string;
+  title: string;
+  chapterCount?: number;
 }
 
 export interface RecommendationBook {
@@ -151,6 +175,18 @@ export function emptyBook(): Book {
     difficulty: '',
     targetReader: '',
     coverColor: '#151A22',
+    sourceType: 'manual_seed',
+    readable: 0,
+    importStatus: 'pending',
+    sourceNote: '',
+    chapterCount: 0,
+    rating: 0,
+    ratingCount: 0,
+    wordCount: 0,
+    readerCount: 0,
+    translator: '',
+    editionNote: '',
+    catalogVolumes: [],
   };
 }
 

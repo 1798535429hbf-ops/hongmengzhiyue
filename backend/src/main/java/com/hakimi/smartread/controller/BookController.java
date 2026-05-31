@@ -31,4 +31,22 @@ public class BookController {
     public ApiResponse<Map<String, Object>> detail(@PathVariable long id) {
         return ApiResponse.ok(repository.getBook(id));
     }
+
+    @GetMapping("/{id}/chapters")
+    public ApiResponse<Object> chapters(@PathVariable long id) {
+        return ApiResponse.ok(repository.listChapters(id));
+    }
+
+    @GetMapping("/{id}/content")
+    public ApiResponse<Map<String, Object>> content(@PathVariable long id,
+                                                    @RequestParam String chapterId) {
+        return ApiResponse.ok(repository.getReadingContent(id, chapterId));
+    }
+
+    @GetMapping("/{id}/reader")
+    public ApiResponse<Map<String, Object>> reader(@PathVariable long id,
+                                                   @RequestParam(defaultValue = "10086") long userId,
+                                                   @RequestParam(defaultValue = "") String chapterId) {
+        return ApiResponse.ok(repository.readerBundle(userId, id, chapterId));
+    }
 }

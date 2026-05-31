@@ -32,7 +32,10 @@ public class SmartReadRepository {
     public List<Map<String, Object>> searchBooks(String keyword, String tag, int page, int size) {
         StringBuilder sql = new StringBuilder("""
                 SELECT id, isbn, title, author, tags, summary, difficulty,
-                       target_reader AS targetReader, cover_color AS coverColor
+                       target_reader AS targetReader, cover_color AS coverColor,
+                       readable, source_type AS sourceType, import_status AS importStatus,
+                       source_note AS sourceNote,
+                       (SELECT COUNT(*) FROM book_chapter bc WHERE bc.book_id = book.id) AS chapterCount
                 FROM book WHERE 1=1
                 """);
         List<Object> args = new ArrayList<>();
@@ -57,7 +60,10 @@ public class SmartReadRepository {
     public Map<String, Object> getBook(long id) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT id, isbn, title, author, tags, summary, difficulty,
-                       target_reader AS targetReader, cover_color AS coverColor
+                       target_reader AS targetReader, cover_color AS coverColor,
+                       readable, source_type AS sourceType, import_status AS importStatus,
+                       source_note AS sourceNote,
+                       (SELECT COUNT(*) FROM book_chapter bc WHERE bc.book_id = book.id) AS chapterCount
                 FROM book WHERE id = ?
                 """, id);
         if (rows.isEmpty()) {
@@ -69,6 +75,81 @@ public class SmartReadRepository {
                 FROM book_chunk WHERE book_id = ? ORDER BY chunk_index
                 """, id));
         return book;
+    }
+
+    public List<Map<String, Object>> listChapters(long bookId) {
+        return jdbc.queryForList("""
+                SELECT chapter_id AS id, chapter_id AS chapterId, book_id AS bookId,
+                       title, chapter_order AS `order`, summary, page_count AS pageCount,
+                       FALSE AS isCurrent
+                FROM book_chapter
+                WHERE book_id = ?
+                ORDER BY chapter_order
+                """, bookId);
+    }
+
+    public Map<String, Object> getReadingContent(long bookId, String chapterId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT book_id AS bookId, chapter_id AS chapterId, title AS chapterTitle,
+                       content, paragraphs_json AS paragraphsJson
+                FROM book_chapter
+                WHERE book_id = ? AND chapter_id = ?
+                """, bookId, chapterId);
+        if (rows.isEmpty()) {
+            throw SmartReadException.notFound("未找到章节正文：" + bookId + "/" + chapterId);
+        }
+        Map<String, Object> row = new LinkedHashMap<>(rows.get(0));
+        String content = string(row, "content");
+        Object paragraphsJson = row.remove("paragraphsJson");
+        row.put("paragraphs", paragraphs(paragraphsJson, content));
+        List<Map<String, Object>> sources = findChunks("", bookId, 3);
+        row.put("sources", sources);
+        row.put("sourceRefs", sources);
+        return row;
+    }
+
+    public Map<String, Object> readerBundle(long userId, long bookId, String chapterId) {
+        Map<String, Object> book = getBook(bookId);
+        List<Map<String, Object>> chapters = listChapters(bookId);
+        if (chapters.isEmpty()) {
+            throw SmartReadException.notFound("这本书还没有可阅读章节");
+        }
+        String selectedChapterId = chapterId == null || chapterId.isBlank()
+                ? String.valueOf(chapters.get(0).get("chapterId"))
+                : chapterId;
+        Map<String, Object> content = getReadingContent(bookId, selectedChapterId);
+        Map<String, Object> plan = findPlanForBook(userId, bookId);
+        Map<String, Object> progress = null;
+        if (plan != null) {
+            progress = Map.of(
+                    "planId", plan.get("id"),
+                    "bookId", bookId,
+                    "chapterId", String.valueOf(plan.getOrDefault("chapterId", selectedChapterId)),
+                    "progress", plan.getOrDefault("progress", 0),
+                    "scrollOffset", plan.getOrDefault("scrollOffset", 0),
+                    "status", plan.getOrDefault("status", "reading"));
+        }
+        return Map.of(
+                "book", book,
+                "plan", plan,
+                "chapters", chapters,
+                "content", content,
+                "progress", progress,
+                "bookmarks", List.of());
+    }
+
+    public Map<String, Object> findPlanForBook(long userId, long bookId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT p.id, p.user_id AS userId, p.book_id AS bookId, p.target_days AS targetDays,
+                       p.progress, p.status, p.chapter_id AS chapterId, p.scroll_offset AS scrollOffset,
+                       p.created_at AS createdAt, p.updated_at AS updatedAt,
+                       b.title, b.author, b.difficulty, b.cover_color AS coverColor
+                FROM reading_plan p JOIN book b ON b.id = p.book_id
+                WHERE p.user_id = ? AND p.book_id = ?
+                ORDER BY p.updated_at DESC
+                LIMIT 1
+                """, userId, bookId);
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     public List<Map<String, Object>> findChunks(String keyword, Long bookId, int size) {
@@ -160,18 +241,19 @@ public class SmartReadRepository {
         return key == null ? 0 : key.longValue();
     }
 
-    public void updatePlan(long planId, int progress, String status) {
+    public void updatePlan(long planId, int progress, String status, String chapterId, int scrollOffset) {
         jdbc.update("""
                 UPDATE reading_plan
-                SET progress = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+                SET progress = ?, status = ?, chapter_id = ?, scroll_offset = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-                """, Math.max(0, Math.min(progress, 100)), status, planId);
+                """, Math.max(0, Math.min(progress, 100)), status, chapterId, Math.max(0, scrollOffset), planId);
     }
 
     public List<Map<String, Object>> listPlans(long userId) {
         return jdbc.queryForList("""
                 SELECT p.id, p.user_id AS userId, p.book_id AS bookId, p.target_days AS targetDays,
-                       p.progress, p.status, p.created_at AS createdAt, p.updated_at AS updatedAt,
+                       p.progress, p.status, p.chapter_id AS chapterId, p.scroll_offset AS scrollOffset,
+                       p.created_at AS createdAt, p.updated_at AS updatedAt,
                        b.title, b.author, b.difficulty, b.cover_color AS coverColor
                 FROM reading_plan p JOIN book b ON b.id = p.book_id
                 WHERE p.user_id = ?
@@ -285,6 +367,28 @@ public class SmartReadRepository {
     private static String string(Map<String, Object> map, String key) {
         Object value = map.get(key);
         return value == null ? "" : value.toString();
+    }
+
+    private static List<String> paragraphs(Object paragraphsJson, String content) {
+        if (paragraphsJson instanceof List<?> list && !list.isEmpty()) {
+            List<String> paragraphs = new ArrayList<>();
+            for (Object item : list) {
+                if (item != null && !item.toString().isBlank()) {
+                    paragraphs.add(item.toString().trim());
+                }
+            }
+            if (!paragraphs.isEmpty()) {
+                return paragraphs;
+            }
+        }
+        if (content == null || content.isBlank()) {
+            return List.of();
+        }
+        return List.of(content.split("\\n\\s*\\n"))
+                .stream()
+                .map(String::trim)
+                .filter(text -> !text.isBlank())
+                .toList();
     }
 
     private static int integer(Map<String, Object> map, String key) {

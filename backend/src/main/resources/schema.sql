@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS book (
   difficulty VARCHAR(32) NOT NULL,
   target_reader VARCHAR(160) NOT NULL,
   cover_color VARCHAR(32) DEFAULT '#1A2A3A',
+  source_type VARCHAR(32) NOT NULL DEFAULT 'manual_seed',
+  readable TINYINT(1) NOT NULL DEFAULT 0,
+  import_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  source_note VARCHAR(255) DEFAULT '',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -33,6 +37,36 @@ CREATE TABLE IF NOT EXISTS book_chunk (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_book_chunk (book_id, chunk_index),
   CONSTRAINT fk_chunk_book FOREIGN KEY (book_id) REFERENCES book(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS book_chapter (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  book_id BIGINT NOT NULL,
+  chapter_id VARCHAR(64) NOT NULL,
+  title VARCHAR(160) NOT NULL,
+  chapter_order INT NOT NULL,
+  summary TEXT NOT NULL,
+  content MEDIUMTEXT NOT NULL,
+  paragraphs_json JSON,
+  page_count INT NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_book_chapter (book_id, chapter_id),
+  KEY idx_book_chapter_order (book_id, chapter_order),
+  CONSTRAINT fk_book_chapter_book FOREIGN KEY (book_id) REFERENCES book(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS book_import_record (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  book_id BIGINT NOT NULL,
+  source_type VARCHAR(32) NOT NULL,
+  file_name VARCHAR(255) DEFAULT '',
+  status VARCHAR(32) NOT NULL DEFAULT 'ready',
+  message VARCHAR(500) DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_book_import_record_book (book_id),
+  CONSTRAINT fk_book_import_record_book FOREIGN KEY (book_id) REFERENCES book(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS favorite (
@@ -69,6 +103,8 @@ CREATE TABLE IF NOT EXISTS reading_plan (
   target_days INT NOT NULL,
   progress INT NOT NULL DEFAULT 0,
   status VARCHAR(32) NOT NULL DEFAULT 'active',
+  chapter_id VARCHAR(64) DEFAULT '',
+  scroll_offset INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

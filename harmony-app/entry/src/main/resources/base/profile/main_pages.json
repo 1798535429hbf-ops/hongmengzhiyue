@@ -6,6 +6,7 @@
     "pages/BookDetailPage",
     "pages/ReaderPage",
     "pages/ChatPage",
-    "pages/CommercePage"
+    "pages/CommercePage",
+    "pages/CatalogPage"
   ]
 }
