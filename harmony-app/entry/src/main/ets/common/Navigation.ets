@@ -1,5 +1,8 @@
 import router from '@ohos.router';
 
+export const ACTIVE_TAB_KEY: string = 'smartread_active_tab';
+export const STORE_TAB_INDEX: number = 1;
+
 function toNumber(value: Object | undefined, fallback: number = 0): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -71,9 +74,31 @@ export function openSearch(keyword: string = ''): void {
   });
 }
 
+export function openStoreTab(): void {
+  AppStorage.setOrCreate(ACTIVE_TAB_KEY, STORE_TAB_INDEX);
+}
+
 export function openShelfManage(): void {
   router.pushUrl({
     url: 'pages/ShelfManagePage',
+  });
+}
+
+export function openLogin(): void {
+  router.pushUrl({
+    url: 'pages/LoginPage',
+  });
+}
+
+export function openProfileEdit(): void {
+  router.pushUrl({
+    url: 'pages/ProfileEditPage',
+  });
+}
+
+export function openSettings(): void {
+  router.pushUrl({
+    url: 'pages/SettingsPage',
   });
 }
 

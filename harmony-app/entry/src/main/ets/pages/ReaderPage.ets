@@ -12,9 +12,8 @@ import {
 import { currentBookId, currentChapterId, goBack, openChat } from '../common/Navigation';
 import { finishReadingSession, setReadingSession } from '../common/ReaderSession';
 import { ShelfStore } from '../common/ShelfStore';
+import { UserSession } from '../common/UserSession';
 import { common } from '@kit.AbilityKit';
-
-const USER_ID: number = 10086;
 
 class ReadingThemeDef {
   name: string = '';
@@ -121,8 +120,12 @@ struct ReaderPage {
     try {
       const book: Book = await ApiClient.getBook(this.bookId);
       const chs: ReadingChapter[] = await ApiClient.listChapters(this.bookId);
-      const plans: PlanItem[] = await ApiClient.listPlans(USER_ID);
-      const plan: PlanItem | null = this.findPlan(plans);
+      let plan: PlanItem | null = null;
+      const userId: number = UserSession.currentUserId();
+      if (userId > 0) {
+        const plans: PlanItem[] = await ApiClient.listPlans(userId);
+        plan = this.findPlan(plans);
+      }
       const targetChId = this.pickChId(chs);
       let nextContent: ReadingContent | null = null;
       if (targetChId) {
@@ -144,6 +147,17 @@ struct ReaderPage {
       this.chapterId = nextContent ? nextContent.chapterId : targetChId;
       this.progress = plan ? plan.progress : this.estimateProgress(this.chapterId);
       setReadingSession(this.bookId, this.chapterId, this.progress);
+      if (userId > 0) {
+        try {
+          await ApiClient.trackEvent({
+            user_id: userId,
+            event_type: 'OPEN_READER',
+            book_id: this.bookId,
+            chapter_id: this.chapterId,
+            progress: this.progress,
+          });
+        } catch (_) {}
+      }
       await this.syncShelfTrace(book, this.chapterId, nextContent ? nextContent.chapterTitle : '', this.progress);
     } catch (e) {
       this.errorText = `阅读器加载失败：${e}`;
@@ -170,11 +184,25 @@ struct ReaderPage {
 
   async saveProgress(): Promise<void> {
     if (!this.bundle.plan) return;
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先登录后再保存阅读进度。';
+      return;
+    }
     this.busyText = '正在保存进度';
     this.errorText = '';
     try {
-      await ApiClient.updatePlanProgress(USER_ID, this.bundle.plan.id, this.bookId,
+      await ApiClient.updatePlanProgress(userId, this.bundle.plan.id, this.bookId,
         this.chapterId, this.progress, 0, this.progress >= 100 ? 'finished' : 'reading');
+      try {
+        await ApiClient.trackEvent({
+          user_id: userId,
+          event_type: 'SAVE_PROGRESS',
+          book_id: this.bookId,
+          chapter_id: this.chapterId,
+          progress: this.progress,
+        });
+      } catch (_) {}
       setReadingSession(this.bookId, this.chapterId, this.progress);
       await this.syncShelfTrace(this.bundle.book, this.chapterId,
         this.content ? this.content.chapterTitle : '', this.progress);
@@ -183,10 +211,15 @@ struct ReaderPage {
   }
 
   async createPlan(): Promise<void> {
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先登录后再创建阅读计划。';
+      return;
+    }
     this.busyText = '正在创建阅读计划';
     this.errorText = '';
     try {
-      await ApiClient.createPlan(USER_ID, this.bookId, 14);
+      await ApiClient.createPlan(userId, this.bookId, 14);
       await this.loadReader();
       this.busyText = '计划已创建';
     } catch (e) { this.errorText = `创建计划失败：${e}`; this.busyText = ''; }

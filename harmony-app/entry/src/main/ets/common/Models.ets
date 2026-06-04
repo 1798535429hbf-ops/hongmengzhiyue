@@ -10,6 +10,7 @@ export interface Book {
   title: string;
   author: string;
   tags: string;
+  category?: string;
   summary: string;
   difficulty: string;
   targetReader: string;
@@ -23,8 +24,11 @@ export interface Book {
   ratingCount?: number;
   wordCount?: number;
   readerCount?: number;
+  publisher?: string;
+  publishDate?: string;
   translator?: string;
   editionNote?: string;
+  bookInfo?: string;
   catalogVolumes?: CatalogVolume[];
 }
 
@@ -46,6 +50,8 @@ export interface RecommendationBook {
   author: string;
   difficulty: string;
   reason: string;
+  highlight?: string;
+  coverColor?: string;
 }
 
 export interface SourceRef {
@@ -138,13 +144,30 @@ export interface NoteItem {
 
 export interface UserProfile {
   id: number;
+  account: string;
+  phone: string;
   name: string;
   major: string;
   grade: string;
   interests: string;
   goal: string;
-  budget: number;
   channels: string;
+}
+
+export interface AnalyticsEventExtra {
+  sourceCount?: number;
+}
+
+export interface AnalyticsEvent {
+  user_id: number;
+  event_type: string;
+  book_id?: number;
+  chapter_id?: string;
+  keyword?: string;
+  tag?: string;
+  duration_seconds?: number;
+  progress?: number;
+  extra?: AnalyticsEventExtra;
 }
 
 export interface ProfileBundle {
@@ -171,6 +194,7 @@ export function emptyBook(): Book {
     title: '',
     author: '',
     tags: '',
+    category: '',
     summary: '',
     difficulty: '',
     targetReader: '',
@@ -184,8 +208,11 @@ export function emptyBook(): Book {
     ratingCount: 0,
     wordCount: 0,
     readerCount: 0,
+    publisher: '',
+    publishDate: '',
     translator: '',
     editionNote: '',
+    bookInfo: '',
     catalogVolumes: [],
   };
 }
@@ -193,12 +220,13 @@ export function emptyBook(): Book {
 export function emptyProfile(): UserProfile {
   return {
     id: 10086,
+    account: '13800010086',
+    phone: '13800010086',
     name: '测试同学',
     major: '计算机科学',
     grade: '大二',
     interests: '人工智能,算法,英语备考',
     goal: '课程拓展与竞赛入门',
-    budget: 80,
     channels: 'library,jd,dangdang,second_hand',
   };
 }

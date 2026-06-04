@@ -4,9 +4,8 @@ import { BookCover } from '../common/BookCover';
 import { currentBookId, goBack, openCatalog, openReader } from '../common/Navigation';
 import { ShelfStore } from '../common/ShelfStore';
 import { Theme } from '../common/Theme';
+import { UserSession } from '../common/UserSession';
 import { common } from '@kit.AbilityKit';
-
-const USER_ID: number = 10086;
 
 @Entry
 @Component
@@ -50,6 +49,12 @@ struct BookDetailPage {
     this.busyText = '正在读取图书详情'; this.errorText = '';
     try {
       this.book = await ApiClient.getBook(this.bookId);
+      const userId: number = UserSession.currentUserId();
+      if (userId > 0) {
+        try {
+          await ApiClient.trackEvent({ user_id: userId, event_type: 'VIEW_BOOK_DETAIL', book_id: this.book.id });
+        } catch (_) {}
+      }
       const ctx = this.hostContext();
       if (ctx) {
         await ShelfStore.recordRemoteBrowse(ctx, {
@@ -62,9 +67,47 @@ struct BookDetailPage {
   }
 
   async addFavorite(): Promise<void> {
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先在“我的”页面登录后再加入书架。';
+      return;
+    }
     this.busyText = '正在加入书架'; this.errorText = '';
-    try { await ApiClient.favorite(USER_ID, this.book.id); this.busyText = '已加入书架'; }
-    catch (err) { this.errorText = `加入书架失败：${err}`; this.busyText = ''; }
+    try {
+      await ApiClient.favorite(userId, this.book.id);
+      try {
+        await ApiClient.trackEvent({ user_id: userId, event_type: 'FAVORITE_BOOK', book_id: this.book.id });
+      } catch (_) {}
+      const ctx = this.hostContext();
+      if (ctx) {
+        await ShelfStore.restoreHistoryBookToShelf(ctx, `history:remote:${this.book.id}`);
+      }
+      this.busyText = '已加入书架';
+    } catch (err) { this.errorText = `加入书架失败：${err}`; this.busyText = ''; }
+  }
+
+  async addToPlan(): Promise<void> {
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先在“我的”页面登录后再加入阅读计划。';
+      return;
+    }
+    if (this.book.id <= 0) {
+      this.errorText = '图书详情还没有加载完成，请稍后再试。';
+      return;
+    }
+    this.busyText = '正在加入阅读计划';
+    this.errorText = '';
+    try {
+      await ApiClient.createPlan(userId, this.book.id, 14);
+      try {
+        await ApiClient.trackEvent({ user_id: userId, event_type: 'CREATE_READING_PLAN', book_id: this.book.id });
+      } catch (_) {}
+      this.busyText = '已加入个人阅读计划';
+    } catch (err) {
+      this.errorText = `加入计划失败：${err}`;
+      this.busyText = '';
+    }
   }
 
   isReadable(): boolean { return this.book.readable === 1 || this.book.readable === true || (this.book.chapterCount || 0) > 0; }
@@ -121,9 +164,14 @@ struct BookDetailPage {
 
   toCn(n: number): string { const m = ['零','一','二','三','四','五','六','七','八','九','十']; if (n <= 10) return m[n]; if (n < 20) return `十${m[n - 10]}`; return `${m[Math.floor(n / 10)]}十${n % 10 > 0 ? m[n % 10] : ''}`; }
 
+  categoryText(): string { return this.book.category || this.pickedTag(this.book.tags, '通识阅读'); }
+  tagsText(): string { return this.book.tags || '-'; }
+  targetReaderText(): string { return this.book.targetReader || '-'; }
   translatorText(): string { return this.book.translator || '-'; }
-  publisherText(): string { return this.book.sourceType || '-'; }
+  publisherText(): string { return this.book.publisher || this.book.sourceType || '-'; }
+  publishDateText(): string { return this.book.publishDate || '-'; }
   isbnText(): string { return this.book.isbn || '-'; }
+  bookInfoText(): string { return this.book.bookInfo || this.book.sourceNote || ''; }
 
   pickedTag(raw: string, fallback: string): string { const t = (raw || '').trim(); if (!t) return fallback; const sep = [',','，','/',' ']; for (let i = 0; i < sep.length; i++) { const idx = t.indexOf(sep[i]); if (idx > 0) return t.substring(0, idx).trim(); } return t; }
 
@@ -185,7 +233,7 @@ struct BookDetailPage {
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .maxLines(1)
-        Text(this.pickedTag(this.book.tags, this.book.difficulty || '详情'))
+        Text(`${this.categoryText()} · ${this.book.difficulty || '详情'}`)
           .fontColor('rgba(255,255,255,0.6)')
           .fontSize(12)
           .maxLines(1)
@@ -238,6 +286,8 @@ struct BookDetailPage {
               .lineHeight(this.titleSize() + 8).maxLines(2)
             Text(this.book.author || '')
               .fontColor('rgba(255,255,255,0.85)').fontSize(this.isWide() ? 17 : 15)
+            Text(`${this.categoryText()} · ${this.book.difficulty || '待评估'}`)
+              .fontColor('rgba(255,255,255,0.78)').fontSize(this.isWide() ? 15 : 13).maxLines(1)
             if (this.book.tags) {
               Text(this.book.tags).fontColor('rgba(255,255,255,0.65)').fontSize(this.isWide() ? 15 : 13).maxLines(1)
             }
@@ -356,10 +406,16 @@ struct BookDetailPage {
       Text('书籍信息').fontColor(Theme.mobileText).fontSize(this.sectionTitleSize()).fontWeight(FontWeight.Bold)
       Column({ space: 12 }) {
         this.InfoRow('作者', this.book.author || '-')
+        this.InfoRow('分类', this.categoryText())
+        this.InfoRow('标签', this.tagsText())
+        this.InfoRow('适合读者', this.targetReaderText())
         this.InfoRow('译者', this.translatorText())
         this.InfoRow('出版社', this.publisherText())
-        this.InfoRow('出版时间', '-')
+        this.InfoRow('出版时间', this.publishDateText())
         this.InfoRow('ISBN', this.isbnText())
+        if (this.bookInfoText()) {
+          this.InfoRow('入库信息', this.bookInfoText())
+        }
       }
     }
     .width('100%').padding(this.cardPadding())
@@ -372,7 +428,8 @@ struct BookDetailPage {
   InfoRow(label: string, value: string) {
     Row() {
       Text(label).fontColor(Theme.mobileSubtext).fontSize(14).width(72)
-      Text(value).fontColor(Theme.mobileText).fontSize(14).layoutWeight(1).maxLines(1)
+      Text(value).fontColor(Theme.mobileText).fontSize(14).layoutWeight(1).maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .width('100%')
   }
@@ -387,9 +444,10 @@ struct BookDetailPage {
       }
       .alignItems(HorizontalAlign.Center).onClick(() => this.addFavorite())
 
-      Button('听书').height(this.isCompact() ? 36 : 40).fontColor('#8B4513').fontSize(this.isWide() ? 17 : 15)
+      Button('加入计划').height(this.isCompact() ? 36 : 40).fontColor('#8B4513').fontSize(this.isWide() ? 17 : 15)
         .backgroundColor('#FFF0E6').borderRadius(20)
         .padding({ left: this.isWide() ? 32 : 24, right: this.isWide() ? 32 : 24 })
+        .onClick(() => this.addToPlan())
 
       Button('立即阅读').layoutWeight(1).height(this.isCompact() ? 38 : 44)
         .fontColor(Theme.mobileSurface).fontSize(this.isWide() ? 18 : 16).fontWeight(FontWeight.Medium)

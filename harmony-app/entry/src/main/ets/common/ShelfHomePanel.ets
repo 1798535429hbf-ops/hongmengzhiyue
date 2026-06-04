@@ -4,12 +4,11 @@ import { openBookDetail, openReader, openSearch, openShelfManage } from './Navig
 import { buildContinueItems, buildHistoryItems, formatReadingDuration, ShelfCardItem, ShelfTabMode } from './ShelfPresentation';
 import { ShelfStore, ShelfStoreState } from './ShelfStore';
 import { Theme } from './Theme';
+import { UserSession } from './UserSession';
 import { common } from '@kit.AbilityKit';
 import cameraPicker from '@ohos.multimedia.cameraPicker';
 import { picker } from '@kit.CoreFileKit';
 import camera from '@ohos.multimedia.camera';
-
-const USER_ID: number = 10086;
 
 @Component
 export struct ShelfHomePanel {
@@ -17,6 +16,7 @@ export struct ShelfHomePanel {
   @Prop @Watch('onRefreshSeedChange') refreshSeed: number = 0;
   private lastRefreshSeed: number = 0;
   @StorageProp('shelf_manage_dirty_timestamp') @Watch('onRefreshSeedChange') shelfDirtyTs: number = 0;
+  @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
   @State shelfMode: ShelfTabMode = 'continue';
   @State shelfContinueItems: ShelfCardItem[] = [];
   @State shelfHistoryItems: ShelfCardItem[] = [];
@@ -37,6 +37,10 @@ export struct ShelfHomePanel {
 
   onRefreshSeedChange(): void {
     this.loadShelfData(false);
+  }
+
+  onSessionUserChange(): void {
+    this.loadShelfData(true);
   }
 
   hostContext(): common.UIAbilityContext | undefined {
@@ -62,8 +66,43 @@ export struct ShelfHomePanel {
     return Math.floor(this.shelfCoverWidth() * 1.36);
   }
 
-  visibleShelfItems(): ShelfCardItem[] {
-    return this.shelfMode === 'continue' ? this.shelfContinueItems : this.shelfHistoryItems;
+  continueCardHeight(): number {
+    if (this.pageWidth >= 600) {
+      return 224;
+    }
+    return this.isCompact() ? 208 : 216;
+  }
+
+  historyCardHeight(): number {
+    if (this.pageWidth >= 600) {
+      return 164;
+    }
+    return this.isCompact() ? 142 : 152;
+  }
+
+  emptyShelfHeight(): number {
+    return this.isCompact() ? 132 : 140;
+  }
+
+  shelfPaneHeight(mode: ShelfTabMode): number {
+    const itemCount: number = this.visibleShelfItems(mode).length;
+    if (itemCount === 0) {
+      return this.emptyShelfHeight();
+    }
+    const cardHeight: number = mode === 'continue' ? this.continueCardHeight() : this.historyCardHeight();
+    return itemCount * cardHeight + (itemCount - 1) * this.sectionGap();
+  }
+
+  shelfModeIndex(): number {
+    return this.shelfMode === 'continue' ? 0 : 1;
+  }
+
+  modeFromIndex(index: number): ShelfTabMode {
+    return index === 1 ? 'history' : 'continue';
+  }
+
+  visibleShelfItems(mode: ShelfTabMode): ShelfCardItem[] {
+    return mode === 'continue' ? this.shelfContinueItems : this.shelfHistoryItems;
   }
 
   updateShelfMode(mode: ShelfTabMode): void {
@@ -82,12 +121,15 @@ export struct ShelfHomePanel {
     }
     this.shelfErrorText = '';
     try {
-      const storeState: ShelfStoreState = await ShelfStore.load(context);
+      const userId: number = UserSession.currentUserId();
+      const storeState: ShelfStoreState = await ShelfStore.load(context, userId);
       let plans: PlanItem[] = [];
-      try {
-        plans = await ApiClient.listPlans(USER_ID);
-      } catch (apiErr) {
-        this.shelfErrorText = `同步阅读计划失败：${apiErr}`;
+      if (userId > 0) {
+        try {
+          plans = await ApiClient.listPlans(userId);
+        } catch (apiErr) {
+          this.shelfErrorText = `同步阅读计划失败：${apiErr}`;
+        }
       }
       this.shelfContinueItems = buildContinueItems(storeState, plans);
       this.shelfHistoryItems = buildHistoryItems(storeState, plans);
@@ -103,9 +145,9 @@ export struct ShelfHomePanel {
     }
   }
 
-  openCardDetail(item: ShelfCardItem): void {
+  openCardDetail(item: ShelfCardItem, mode: ShelfTabMode): void {
     if (item.sourceType === 'remote' && item.remoteBookId) {
-      if (this.shelfMode === 'continue') {
+      if (mode === 'continue') {
         openReader(item.remoteBookId, item.chapterId || '');
       } else {
         openBookDetail(item.remoteBookId);
@@ -117,9 +159,9 @@ export struct ShelfHomePanel {
     }
   }
 
-  openCardAction(item: ShelfCardItem): void {
+  openCardAction(item: ShelfCardItem, mode: ShelfTabMode): void {
     if (item.sourceType === 'remote' && item.remoteBookId) {
-      if (this.shelfMode === 'continue') {
+      if (mode === 'continue') {
         openReader(item.remoteBookId, item.chapterId || '');
       } else {
         openBookDetail(item.remoteBookId);
@@ -140,9 +182,14 @@ export struct ShelfHomePanel {
     this.shelfBusyText = '正在打开本地书籍';
     this.shelfErrorText = '';
     try {
-      await ShelfStore.openLocalBook(context, bookKey);
+      const opened = await ShelfStore.openLocalBook(context, bookKey);
       await this.loadShelfData(false);
-      this.shelfBusyText = '本地书籍已打开';
+      if (opened.remoteBookId && opened.remoteBookId > 0) {
+        this.shelfBusyText = '本地书籍已入库，正在进入阅读器';
+        openReader(opened.remoteBookId);
+      } else {
+        this.shelfBusyText = '本地书籍已打开';
+      }
     } catch (err) {
       this.shelfErrorText = `打开本地书籍失败：${err}`;
       this.shelfBusyText = '';
@@ -162,7 +209,7 @@ export struct ShelfHomePanel {
       const documentPicker = new picker.DocumentViewPicker();
       const options = new picker.DocumentSelectOptions();
       options.maxSelectNumber = 10;
-      options.fileSuffixFilters = ['书籍|.pdf,.epub,.txt,.md,.markdown,.doc,.docx'];
+      options.fileSuffixFilters = ['可入库书籍|.epub,.txt,.md,.markdown'];
       const selectedUris: Array<string> = await documentPicker.select(options);
       if (!selectedUris || selectedUris.length === 0) {
         this.shelfBusyText = '';
@@ -172,7 +219,7 @@ export struct ShelfHomePanel {
       const result = await ShelfStore.importLocalBooks(context, selectedUris);
       await this.loadShelfData(false);
       if (result.imported.length > 0) {
-        this.shelfBusyText = `已导入 ${result.imported.length} 本本地书`;
+        this.shelfBusyText = `已入库 ${result.imported.length} 本本地书，可搜索和 AI 推荐`;
       } else {
         this.shelfBusyText = '所选书籍已在书架中';
       }
@@ -290,116 +337,118 @@ export struct ShelfHomePanel {
   }
 
   build() {
-    Column({ space: this.sectionGap() }) {
-      Column({ space: 14 }) {
-        Stack({ alignContent: Alignment.TopEnd }) {
-          Row({ space: 14 }) {
-            Column({ space: 4 }) {
-              Text('今日阅读时长')
-                .fontColor(Theme.mobileSubtext)
-                .fontSize(13)
-                .fontWeight(FontWeight.Medium)
-              Text(this.todayReadingLabel)
-                .fontColor(Theme.mobileText)
-                .fontSize(this.isCompact() ? 26 : 30)
-                .fontWeight(FontWeight.Bold)
-              Text('书架')
-                .fontColor(Theme.mobileSubtext)
-                .fontSize(14)
-            }
-            .alignItems(HorizontalAlign.Start)
-
-            Blank()
-
-            Row({ space: 8 }) {
-              Stack() {
-                this.CircleActionButton($r('app.media.discover_search'))
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column({ space: this.sectionGap() }) {
+        Column({ space: 14 }) {
+          Stack({ alignContent: Alignment.TopEnd }) {
+            Row({ space: 14 }) {
+              Column({ space: 4 }) {
+                Text('今日阅读时长')
+                  .fontColor(Theme.mobileSubtext)
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                Text(this.todayReadingLabel)
+                  .fontColor(Theme.mobileText)
+                  .fontSize(this.isCompact() ? 26 : 30)
+                  .fontWeight(FontWeight.Bold)
+                Text('书架')
+                  .fontColor(Theme.mobileSubtext)
+                  .fontSize(14)
               }
-              .onClick(() => {
-                this.showShelfMenu = false;
-                openSearch();
-              })
+              .alignItems(HorizontalAlign.Start)
 
-              Stack() {
-                this.CircleActionButton($r('app.media.mobile_more_circle'))
+              Blank()
+
+              Row({ space: 8 }) {
+                Stack() {
+                  this.CircleActionButton($r('app.media.discover_search'))
+                }
+                .onClick(() => {
+                  this.showShelfMenu = false;
+                  openSearch();
+                })
+
+                Stack() {
+                  this.CircleActionButton($r('app.media.mobile_more_circle'))
+                }
+                .onClick(() => this.toggleShelfMenu())
               }
-              .onClick(() => this.toggleShelfMenu())
             }
+            .width('100%')
+            .alignItems(VerticalAlign.Top)
           }
           .width('100%')
-          .alignItems(VerticalAlign.Top)
 
-          if (this.showShelfMenu) {
-            Column() {
-              this.ShelfOverflowMenu()
+          Row({ space: 24 }) {
+            Column({ space: 6 }) {
+              Text('继续阅读')
+                .fontColor(this.shelfMode === 'continue' ? Theme.mobileText : Theme.mobileSubtext)
+                .fontSize(16)
+                .fontWeight(this.shelfMode === 'continue' ? FontWeight.Medium : FontWeight.Regular)
+              if (this.shelfMode === 'continue') {
+                Row()
+                  .width(28).height(3).borderRadius(2).backgroundColor(Theme.mobileRed)
+              }
             }
-            .margin({ top: 50, right: 0 })
-            .zIndex(10)
+            .alignItems(HorizontalAlign.Center)
+            .onClick(() => { this.updateShelfMode('continue'); })
+
+            Column({ space: 6 }) {
+              Text('浏览记录')
+                .fontColor(this.shelfMode === 'history' ? Theme.mobileText : Theme.mobileSubtext)
+                .fontSize(16)
+                .fontWeight(this.shelfMode === 'history' ? FontWeight.Medium : FontWeight.Regular)
+              if (this.shelfMode === 'history') {
+                Row()
+                  .width(28).height(3).borderRadius(2).backgroundColor(Theme.mobileRed)
+              }
+            }
+            .alignItems(HorizontalAlign.Center)
+            .onClick(() => { this.updateShelfMode('history'); })
+
+            Blank()
+            Button('管理')
+              .height(38)
+              .fontColor(Theme.mobileText)
+              .backgroundColor(Theme.mobileSurface)
+              .borderRadius(18)
+              .padding({ left: 16, right: 16 })
+              .shadow({ radius: 12, color: '#12000000', offsetX: 0, offsetY: 6 })
+              .onClick(() => {
+                this.showShelfMenu = false;
+                openShelfManage();
+              })
           }
+          .width('100%')
         }
-        .width('100%')
 
-        Row({ space: 24 }) {
-          Column({ space: 6 }) {
-            Text('继续阅读')
-              .fontColor(this.shelfMode === 'continue' ? Theme.mobileText : Theme.mobileSubtext)
-              .fontSize(16)
-              .fontWeight(this.shelfMode === 'continue' ? FontWeight.Medium : FontWeight.Regular)
-            if (this.shelfMode === 'continue') {
-              Row()
-                .width(28).height(3).borderRadius(2).backgroundColor(Theme.mobileRed)
-            }
-          }
-          .alignItems(HorizontalAlign.Center)
-          .onClick(() => { this.updateShelfMode('continue'); })
-
-          Column({ space: 6 }) {
-            Text('浏览记录')
-              .fontColor(this.shelfMode === 'history' ? Theme.mobileText : Theme.mobileSubtext)
-              .fontSize(16)
-              .fontWeight(this.shelfMode === 'history' ? FontWeight.Medium : FontWeight.Regular)
-            if (this.shelfMode === 'history') {
-              Row()
-                .width(28).height(3).borderRadius(2).backgroundColor(Theme.mobileRed)
-            }
-          }
-          .alignItems(HorizontalAlign.Center)
-          .onClick(() => { this.updateShelfMode('history'); })
-
-          Blank()
-          Button('管理')
-            .height(38)
-            .fontColor(Theme.mobileText)
-            .backgroundColor(Theme.mobileSurface)
-            .borderRadius(18)
-            .padding({ left: 16, right: 16 })
-            .shadow({ radius: 12, color: '#12000000', offsetX: 0, offsetY: 6 })
-            .onClick(() => {
-              this.showShelfMenu = false;
-              openShelfManage();
-            })
+        if (this.shelfBusyText) {
+          this.StatusBanner(this.shelfBusyText, Theme.mobileBlue)
         }
-        .width('100%')
-      }
+        if (this.shelfErrorText) {
+          this.StatusBanner(this.shelfErrorText, Theme.mobileRed)
+        }
 
-      if (this.shelfBusyText) {
-        this.StatusBanner(this.shelfBusyText, Theme.mobileBlue)
-      }
-      if (this.shelfErrorText) {
-        this.StatusBanner(this.shelfErrorText, Theme.mobileRed)
-      }
+        this.ShelfSwipeContent()
 
-      if (this.visibleShelfItems().length > 0) {
-        ForEach(this.visibleShelfItems(), (item: ShelfCardItem) => {
-          this.ShelfCard(item)
-        }, (item: ShelfCardItem) => `${item.key}_v${this.shelfVersion}`)
-      } else {
-        this.EmptyShelfCard()
+        this.ImportCard()
       }
+      .width('100%')
 
-      this.ImportCard()
+      if (this.showShelfMenu) {
+        this.ShelfMenuOverlay()
+      }
     }
     .width('100%')
+  }
+
+  @Builder
+  ShelfMenuOverlay() {
+    Column() {
+      this.ShelfOverflowMenu()
+    }
+    .margin({ top: 50, right: 0 })
+    .zIndex(20)
   }
 
   @Builder
@@ -434,22 +483,54 @@ export struct ShelfHomePanel {
         })
     }
     .padding(8)
-    .backgroundColor('#FFF9F4')
+    .backgroundColor(Theme.mobileSurface)
+    .border({ width: 1, color: Theme.mobileLine })
     .borderRadius(18)
     .shadow({ radius: 20, color: '#18000000', offsetX: 0, offsetY: 12 })
   }
 
   @Builder
-  ShelfCard(item: ShelfCardItem) {
-    if (this.shelfMode === 'continue') {
-      this.ContinueCard(item)
+  ShelfSwipeContent() {
+    Swiper() {
+      this.ShelfPane('continue')
+      this.ShelfPane('history')
+    }
+    .index(this.shelfModeIndex())
+    .indicator(false)
+    .loop(false)
+    .duration(260)
+    .width('100%')
+    .height(this.shelfPaneHeight(this.shelfMode))
+    .onChange((index: number) => {
+      this.updateShelfMode(this.modeFromIndex(index));
+    })
+  }
+
+  @Builder
+  ShelfPane(mode: ShelfTabMode) {
+    Column({ space: this.sectionGap() }) {
+      if (this.visibleShelfItems(mode).length > 0) {
+        ForEach(this.visibleShelfItems(mode), (item: ShelfCardItem) => {
+          this.ShelfCard(item, mode)
+        }, (item: ShelfCardItem) => `${mode}_${item.key}_v${this.shelfVersion}`)
+      } else {
+        this.EmptyShelfCard(mode)
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
+  ShelfCard(item: ShelfCardItem, mode: ShelfTabMode) {
+    if (mode === 'continue') {
+      this.ContinueCard(item, mode)
     } else {
       this.HistoryCard(item)
     }
   }
 
   @Builder
-  ContinueCard(item: ShelfCardItem) {
+  ContinueCard(item: ShelfCardItem, mode: ShelfTabMode) {
     Row({ space: 14 }) {
       Stack({ alignContent: Alignment.TopStart }) {
         this.BookPlaceholder(this.shelfCoverWidth(), this.shelfCoverHeight(), item.coverTone)
@@ -465,7 +546,7 @@ export struct ShelfHomePanel {
         }
       }
       .onClick(() => {
-        this.openCardDetail(item);
+        this.openCardDetail(item, mode);
       })
 
       Column({ space: 10 }) {
@@ -500,7 +581,7 @@ export struct ShelfHomePanel {
             .borderRadius(14)
             .padding({ left: 14, right: 14 })
             .onClick(() => {
-              this.openCardAction(item);
+              this.openCardAction(item, mode);
             })
         }
         .width('100%')
@@ -524,10 +605,11 @@ export struct ShelfHomePanel {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .onClick(() => {
-        this.openCardDetail(item);
+        this.openCardDetail(item, mode);
       })
     }
     .width('100%')
+    .height(this.continueCardHeight())
     .padding(16)
     .backgroundColor(Theme.mobileSurface)
     .borderRadius(26)
@@ -576,6 +658,7 @@ export struct ShelfHomePanel {
       }
     }
     .width('100%')
+    .height(this.historyCardHeight())
     .padding(14)
     .backgroundColor(Theme.mobileSurface)
     .borderRadius(24)
@@ -604,7 +687,7 @@ export struct ShelfHomePanel {
           .fontColor(Theme.mobileText)
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
-        Text('支持 PDF / EPUB / TXT / DOC 等格式')
+        Text('支持 TXT / MD / EPUB 入库，搜索和 AI 都能使用')
           .fontColor(Theme.mobileSubtext)
           .fontSize(14)
       }
@@ -625,19 +708,20 @@ export struct ShelfHomePanel {
   }
 
   @Builder
-  EmptyShelfCard() {
+  EmptyShelfCard(mode: ShelfTabMode) {
     Column({ space: 10 }) {
-      Text(this.shelfMode === 'continue' ? '书架里还没有继续阅读内容' : '还没有浏览记录')
+      Text(mode === 'continue' ? '书架里还没有继续阅读内容' : '还没有浏览记录')
         .fontColor(Theme.mobileText)
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-      Text(this.shelfMode === 'continue' ? '从搜索页找书，或者导入本地 PDF 到书架。' : '打开图书详情页、阅读器或本地书籍后，痕迹会出现在这里。')
+      Text(mode === 'continue' ? '从搜索页找书，或者导入本地 PDF 到书架。' : '打开图书详情页、阅读器或本地书籍后，痕迹会出现在这里。')
         .fontColor(Theme.mobileSubtext)
         .fontSize(14)
         .lineHeight(22)
         .textAlign(TextAlign.Center)
     }
     .width('100%')
+    .height(this.emptyShelfHeight())
     .padding({ left: 22, right: 22, top: 28, bottom: 28 })
     .backgroundColor(Theme.mobileSurface)
     .borderRadius(24)

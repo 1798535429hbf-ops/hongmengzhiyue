@@ -1,10 +1,9 @@
 import { ApiClient, ChatResult } from '../common/ApiClient';
-import { Book, SourceRef, emptyBook } from '../common/Models';
+import { AnalyticsEvent, AnalyticsEventExtra, Book, SourceRef, emptyBook } from '../common/Models';
 import { BookCover } from '../common/BookCover';
 import { currentBookId, goBack, openReader } from '../common/Navigation';
 import { Theme } from '../common/Theme';
-
-const USER_ID: number = 10086;
+import { UserSession } from '../common/UserSession';
 
 @Entry
 @Component
@@ -36,14 +35,33 @@ struct ChatPage {
   }
 
   async askBook(): Promise<void> {
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先在“我的”页面登录后再使用 AI 伴读。';
+      return;
+    }
     this.busyText = 'AI 伴读正在检索来源片段';
     this.errorText = '';
     this.answer = '';
     try {
-      const result: ChatResult = await ApiClient.chat(USER_ID, this.bookId, this.question);
+      const result: ChatResult = await ApiClient.chat(userId, this.bookId, this.question);
       this.answer = result.answer || '';
       this.sources = result.sources || [];
       this.followUpSuggestion = result.follow_up_suggestion || '';
+      if (result.llm_status === 'recovered') {
+        this.followUpSuggestion = this.followUpSuggestion || '可以继续追问某一章、某个概念，或让我把这段整理成笔记。';
+      }
+      try {
+        const extra: AnalyticsEventExtra = { sourceCount: this.sources.length };
+        const event: AnalyticsEvent = {
+          user_id: userId,
+          event_type: 'ASK_AI',
+          book_id: this.bookId,
+          keyword: this.question,
+          extra,
+        };
+        await ApiClient.trackEvent(event);
+      } catch (_) {}
     } catch (err) {
       this.errorText = `伴读失败：${err}`;
     } finally {
@@ -55,10 +73,15 @@ struct ChatPage {
     if (!this.answer) {
       return;
     }
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先登录后再保存笔记。';
+      return;
+    }
     this.busyText = '正在保存为笔记';
     this.errorText = '';
     try {
-      await ApiClient.saveNote(USER_ID, this.bookId, this.answer);
+      await ApiClient.saveNote(userId, this.bookId, this.answer);
       this.busyText = '笔记已保存';
     } catch (err) {
       this.errorText = `保存笔记失败：${err}`;

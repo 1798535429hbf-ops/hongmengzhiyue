@@ -2,22 +2,46 @@ import { ShelfHomePanel } from '../common/ShelfHomePanel';
 import { Theme } from '../common/Theme';
 import { StoreContent } from './StoreContent';
 import { CategoryContent } from './CategoryContent';
-import { DiscoverContent } from './DiscoverContent';
+import { PlanContent } from './PlanContent';
 import { ProfileContent } from './ProfileContent';
+import { UserSession } from '../common/UserSession';
+import { common } from '@kit.AbilityKit';
 
 @Entry
 @Component
 struct Index {
-  @State activeTab: number = 0;
+  @StorageLink('smartread_active_tab') activeTab: number = 0;
   @State pageWidth: number = 390;
   @State shelfRefreshSeed: number = 0;
+  @State planRefreshSeed: number = 0;
+  @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
 
   aboutToAppear(): void {
+    this.bootstrapSession();
     this.shelfRefreshSeed++;
+    this.planRefreshSeed++;
   }
 
   onPageShow(): void {
     this.shelfRefreshSeed++;
+    this.planRefreshSeed++;
+  }
+
+  hostContext(): common.UIAbilityContext | undefined {
+    return getContext(this) as common.UIAbilityContext | undefined;
+  }
+
+  async bootstrapSession(): Promise<void> {
+    const context = this.hostContext();
+    if (!context) {
+      return;
+    }
+    await UserSession.bootstrap(context);
+  }
+
+  onSessionUserChange(): void {
+    this.shelfRefreshSeed++;
+    this.planRefreshSeed++;
   }
 
   isCompact(): boolean {
@@ -59,6 +83,18 @@ struct Index {
   }
 
   contentMaxWidth(): number {
+    if (this.activeTab === 4) {
+      if (this.pageWidth >= 1100) {
+        return 1160;
+      }
+      if (this.pageWidth >= 900) {
+        return 1040;
+      }
+      if (this.isTabletLike()) {
+        return 900;
+      }
+      return 640;
+    }
     if (this.pageWidth >= 900) {
       return 760;
     }
@@ -71,6 +107,9 @@ struct Index {
   tabAccent(index: number): string {
     if (index === 0 || index === 4) {
       return Theme.mobileRed;
+    }
+    if (index === 3) {
+      return Theme.mobileGreen;
     }
     return Theme.mobileBlue;
   }
@@ -87,7 +126,7 @@ struct Index {
       return active ? $r('app.media.mobile_tab_category_active') : $r('app.media.mobile_tab_category');
     }
     if (index === 3) {
-      return active ? $r('app.media.mobile_tab_discover_active') : $r('app.media.mobile_tab_discover');
+      return active ? $r('app.media.mobile_tab_plan_active') : $r('app.media.mobile_tab_plan');
     }
     return active ? $r('app.media.mobile_tab_me_active') : $r('app.media.mobile_tab_me');
   }
@@ -138,7 +177,7 @@ struct Index {
     } else if (this.activeTab === 2) {
       CategoryContent({ pageWidth: this.pageWidth })
     } else if (this.activeTab === 3) {
-      DiscoverContent({ pageWidth: this.pageWidth })
+      PlanContent({ pageWidth: this.pageWidth, refreshSeed: this.planRefreshSeed })
     } else {
       ProfileContent({ pageWidth: this.pageWidth })
     }
@@ -150,7 +189,7 @@ struct Index {
       this.BottomTabItem(0, '书架')
       this.BottomTabItem(1, '书城')
       this.BottomTabItem(2, '分类')
-      this.BottomTabItem(3, '发现')
+      this.BottomTabItem(3, '计划')
       this.BottomTabItem(4, '我的')
     }
     .width('100%')
@@ -183,6 +222,9 @@ struct Index {
       this.activeTab = index;
       if (index === 0) {
         this.shelfRefreshSeed++;
+      }
+      if (index === 3) {
+        this.planRefreshSeed++;
       }
     })
   }

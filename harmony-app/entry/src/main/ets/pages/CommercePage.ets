@@ -2,8 +2,7 @@ import { ApiClient, CommerceBundle } from '../common/ApiClient';
 import { Book, CommerceResult, emptyBook } from '../common/Models';
 import { currentBookId, goBack } from '../common/Navigation';
 import { Theme } from '../common/Theme';
-
-const USER_ID: number = 10086;
+import { UserSession } from '../common/UserSession';
 
 @Entry
 @Component
@@ -25,11 +24,16 @@ struct CommercePage {
       this.errorText = '缺少 bookId，无法检索购书 / 馆藏渠道。';
       return;
     }
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先在“我的”页面登录后再检索购书 / 馆藏渠道。';
+      return;
+    }
     this.busyText = '正在聚合馆藏、电商和二手渠道';
     this.errorText = '';
     try {
       this.book = await ApiClient.getBook(this.bookId);
-      const data: CommerceBundle = await ApiClient.commerceSearch(USER_ID, this.book.id, this.book.isbn);
+      const data: CommerceBundle = await ApiClient.commerceSearch(userId, this.book.id, this.book.isbn);
       this.results = data.results || [];
       this.message = data.message || '';
     } catch (err) {
@@ -40,10 +44,15 @@ struct CommercePage {
   }
 
   async confirm(item: CommerceResult): Promise<void> {
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先登录后再确认购书 / 借阅。';
+      return;
+    }
     this.busyText = '正在确认并回写选择';
     this.errorText = '';
     try {
-      await ApiClient.confirmPurchase(USER_ID, this.book.id, item);
+      await ApiClient.confirmPurchase(userId, this.book.id, item);
       this.busyText = item.platform === 'library' ? '已确认预约借阅' : '已确认购买 / 愿望单动作';
     } catch (err) {
       this.errorText = `确认失败：${err}`;

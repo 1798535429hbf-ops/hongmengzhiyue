@@ -3,10 +3,10 @@ import { Book } from '../common/Models';
 import { BookCover } from '../common/BookCover';
 import { currentKeyword, goBack, openBookDetail, openReader } from '../common/Navigation';
 import { ShelfStore } from '../common/ShelfStore';
+import { UserSession } from '../common/UserSession';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 
-const USER_ID: number = 10086;
 const MAX_SEARCH_HISTORY_COUNT: number = 8;
 const MAX_SUGGESTION_COUNT: number = 10;
 const SEARCH_PREFERENCES_NAME: string = 'smartread_search_store';
@@ -32,6 +32,7 @@ struct SearchPage {
   @State searchHistory: SearchHistoryItem[] = [];
   @State showClearHistoryConfirm: boolean = false;
   @State mode: SearchMode = 'history';
+  @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
 
   aboutToAppear(): void {
     this.keyword = currentKeyword();
@@ -39,6 +40,10 @@ struct SearchPage {
     if (this.keyword) {
       this.loadSuggestions();
     }
+  }
+
+  onSessionUserChange(): void {
+    this.loadSearchHistory();
   }
 
   isCompact(): boolean {
@@ -68,7 +73,9 @@ struct SearchPage {
     if (!context) {
       return null;
     }
-    return await preferences.getPreferences(context, SEARCH_PREFERENCES_NAME);
+    const userId: number = UserSession.currentUserId();
+    const suffix: string = userId > 0 ? `${userId}` : 'guest';
+    return await preferences.getPreferences(context, `${SEARCH_PREFERENCES_NAME}_${suffix}`);
   }
 
   async loadSearchHistory(): Promise<void> {
@@ -187,6 +194,12 @@ struct SearchPage {
     this.mode = 'results';
     try {
       this.results = await ApiClient.searchBooks(query);
+      const userId: number = UserSession.currentUserId();
+      if (userId > 0) {
+        try {
+          await ApiClient.trackEvent({ user_id: userId, event_type: 'SEARCH', keyword: query });
+        } catch (_) {}
+      }
       this.recordSearchHistory(query);
       if (this.results.length === 0) {
         this.errorText = '';

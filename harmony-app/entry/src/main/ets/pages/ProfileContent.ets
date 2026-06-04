@@ -1,406 +1,279 @@
+import { ApiClient } from '../common/ApiClient';
+import { Book, ChatRecord, NoteItem, PlanItem, UserProfile, emptyProfile } from '../common/Models';
+import { openLogin, openProfileEdit, openSettings } from '../common/Navigation';
 import { Theme } from '../common/Theme';
+import { UserSession } from '../common/UserSession';
 
-interface ProfileService {
+interface ProfileMenuItem {
   title: string;
-  subtitle: string;
-  icon: Resource;
+  count: number;
+  action: string;
 }
-
-interface ProfileTool {
-  title: string;
-  icon: Resource;
-}
-
-const PROFILE_SERVICE_ROWS: ProfileService[][] = [
-  [
-    {
-      title: '画像中心',
-      subtitle: '编辑兴趣与渠道偏好',
-      icon: $r('app.media.profile_user'),
-    },
-    {
-      title: '活动中心',
-      subtitle: '校园阅读活动进行中',
-      icon: $r('app.media.profile_gift'),
-    },
-  ],
-  [
-    {
-      title: '阅读计划',
-      subtitle: '管理伴读节奏与进度',
-      icon: $r('app.media.profile_calendar'),
-    },
-    {
-      title: '问答记录',
-      subtitle: '查看 AI 伴读历史',
-      icon: $r('app.media.profile_chat'),
-    },
-  ],
-  [
-    {
-      title: '我的笔记',
-      subtitle: '摘录与灵感随时回看',
-      icon: $r('app.media.profile_note'),
-    },
-    {
-      title: '浏览记录',
-      subtitle: '保留最近访问轨迹',
-      icon: $r('app.media.profile_clock'),
-    },
-  ],
-];
-
-const PROFILE_TOOLS: ProfileTool[] = [
-  { title: '收藏夹', icon: $r('app.media.profile_star') },
-  { title: '阅读计划', icon: $r('app.media.profile_calendar') },
-  { title: '阅读画像', icon: $r('app.media.profile_user') },
-  { title: '成长勋章', icon: $r('app.media.profile_document') },
-  { title: '渠道偏好', icon: $r('app.media.profile_download') },
-  { title: '浏览记录', icon: $r('app.media.profile_clock') },
-  { title: '关注作者', icon: $r('app.media.profile_user_plus') },
-  { title: '字体设置', icon: $r('app.media.profile_font') },
-];
 
 @Component
 export struct ProfileContent {
   @Prop pageWidth: number = 390;
+  @StorageLink('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
+  @StorageLink('smartread_session_user_name') sessionUserName: string = '';
+
+  @State profile: UserProfile = emptyProfile();
+  @State favorites: Book[] = [];
+  @State notes: NoteItem[] = [];
+  @State plans: PlanItem[] = [];
+  @State chats: ChatRecord[] = [];
+  @State busyText: string = '';
+  @State errorText: string = '';
+  @State toastText: string = '';
+  @State showToast: boolean = false;
+
+  aboutToAppear(): void {
+    this.loadDashboard();
+  }
+
+  onPageShow(): void {
+    this.loadDashboard();
+  }
+
+  onSessionUserChange(): void {
+    this.loadDashboard();
+  }
+
+  loggedIn(): boolean {
+    return Number.isFinite(this.sessionUserId) && this.sessionUserId > 0;
+  }
 
   isCompact(): boolean {
     return this.pageWidth < 360;
   }
 
-  sectionGap(): number {
-    return this.isCompact() ? 16 : 18;
+  pageGap(): number {
+    return this.isCompact() ? 14 : 18;
+  }
+
+  displayName(): string {
+    if (!this.loggedIn()) {
+      return '登录/注册';
+    }
+    return this.sessionUserName || this.profile.name || `智阅同学 ${this.sessionUserId}`;
+  }
+
+  displaySubtitle(): string {
+    if (!this.loggedIn()) {
+      return '登录后同步收藏与浏览记录';
+    }
+    const major = this.profile.major || '未填写专业';
+    const grade = this.profile.grade || '未填写年级';
+    return `${major} · ${grade}`;
+  }
+
+  menuItems(): ProfileMenuItem[] {
+    return [
+      { title: '我的收藏', count: this.favorites.length, action: 'favorite' },
+      { title: '浏览记录', count: this.chats.length + this.plans.length + this.notes.length, action: 'history' },
+    ];
+  }
+
+  async loadDashboard(): Promise<void> {
+    const userId = this.sessionUserId;
+    if (userId <= 0) {
+      this.profile = emptyProfile();
+      this.favorites = [];
+      this.notes = [];
+      this.plans = [];
+      this.chats = [];
+      this.errorText = '';
+      this.busyText = '';
+      return;
+    }
+
+    this.busyText = '正在同步账号数据';
+    this.errorText = '';
+    try {
+      const bundle = await ApiClient.profile(userId);
+      this.profile = bundle.profile || UserSession.currentProfile() || emptyProfile();
+      this.favorites = bundle.favorites || [];
+      this.notes = bundle.notes || [];
+      this.plans = bundle.plans || [];
+      this.chats = bundle.chat_records || [];
+    } catch (err) {
+      this.profile = UserSession.currentProfile() || emptyProfile();
+      this.favorites = [];
+      this.notes = [];
+      this.plans = [];
+      this.chats = [];
+      this.errorText = `账号数据加载失败：${err}`;
+    } finally {
+      this.busyText = '';
+    }
+  }
+
+  flashToast(text: string): void {
+    this.toastText = text;
+    this.showToast = true;
+    setTimeout(() => {
+      this.showToast = false;
+      this.toastText = '';
+    }, 1400);
+  }
+
+  handleAccountTap(): void {
+    if (this.loggedIn()) {
+      openProfileEdit();
+    } else {
+      openLogin();
+    }
+  }
+
+  handleMenu(action: string): void {
+    if (!this.loggedIn()) {
+      openLogin();
+      return;
+    }
+    if (action === 'favorite') {
+      this.flashToast(`当前账号已收藏 ${this.favorites.length} 本书`);
+      return;
+    }
+    this.flashToast(`浏览记录包含 ${this.plans.length} 个阅读计划、${this.notes.length} 条笔记、${this.chats.length} 条问答`);
   }
 
   build() {
-    Column({ space: this.sectionGap() }) {
-      Row({ space: 10 }) {
-        this.IconOnlyButton($r('app.media.mobile_filter'))
-        Row({ space: 6 }) {
-          Circle()
-            .width(8)
-            .height(8)
-            .fill('#91A8FF')
-          Text('校园福利专区')
-            .fontColor(Theme.mobileSubtext)
-            .fontSize(15)
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column({ space: this.pageGap() }) {
+        this.TopTools()
+        this.AccountHero()
+        if (this.errorText) {
+          this.StatusBanner(this.errorText, Theme.mobileRed)
         }
-        .padding({ left: 12, right: 14, top: 8, bottom: 8 })
-        .backgroundColor('#F2F4FF')
-        .borderRadius(18)
-        Blank()
-        this.IconOnlyButton($r('app.media.profile_moon'))
-        this.NotificationButton()
-      }
-      .alignItems(VerticalAlign.Center)
-
-      Row({ space: 16 }) {
-        Image($r('app.media.profile_avatar'))
-          .width(88)
-          .height(88)
-          .borderRadius(44)
-        Column({ space: 8 }) {
-          Text('鸿蒙智阅同学')
-            .fontColor(Theme.mobileText)
-            .fontSize(28)
-            .fontWeight(FontWeight.Bold)
-          Row({ space: 8 }) {
-            this.LevelBadge('Lv.6')
-            this.LevelBadge('阅读成长中')
-          }
+        if (this.busyText) {
+          this.StatusBanner(this.busyText, Theme.mobileBlue)
         }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        Text('>')
-          .fontColor('#CFD3DE')
-          .fontSize(26)
-      }
-      .alignItems(VerticalAlign.Center)
-
-      Column({ space: 18 }) {
-        Row() {
-          Text('我的账户')
-            .fontColor(Theme.mobileText)
-            .fontSize(18)
-            .fontWeight(FontWeight.Medium)
-          Blank()
-          Text('更多')
-            .fontColor('#B6BAC6')
-            .fontSize(15)
-        }
-
-        Row() {
-          this.AccountStat('12', '阅读积分')
-          this.AccountStat('4', '进行中计划')
-          this.AccountStat('18', '笔记')
-          this.AccountStat('9', '收藏')
-          Column() {
-            Blank()
-            Row() {
-              Text('查看画像')
-                .fontColor(Theme.mobileSurface)
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-            }
-            .padding({ left: 18, right: 18, top: 10, bottom: 10 })
-            .backgroundColor(Theme.mobileRed)
-            .borderRadius(18)
-          }
-          .alignItems(HorizontalAlign.End)
-        }
-        .alignItems(VerticalAlign.Center)
-      }
-      .width('100%')
-      .padding(18)
-      .backgroundColor(Theme.mobileSurface)
-      .borderRadius(24)
-      .shadow({ radius: 18, color: '#18000000', offsetX: 0, offsetY: 10 })
-
-      Row() {
-        Column({ space: 8 }) {
-          Text('阅读成长计划')
-            .fontColor('#8A622A')
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-          Text('开通享受校园伴读、计划提醒和专题推荐权益')
-            .fontColor('#B38A58')
-            .fontSize(13)
-            .maxLines(2)
-        }
-        .layoutWeight(1)
-        Text('立即查看 >')
-          .fontColor('#A27337')
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-      }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 16, bottom: 16 })
-      .backgroundColor('#FFF2D9')
-      .borderRadius(22)
-
-      Column({ space: 14 }) {
-        ForEach(PROFILE_SERVICE_ROWS, (rowItems: ProfileService[], index: number) => {
-          Row({ space: 14 }) {
-            this.ProfileServiceCard(rowItems[0])
-            this.ProfileServiceCard(rowItems[1])
-          }
-          .width('100%')
-        }, (rowItems: ProfileService[], index: number) => `service-${index}`)
+        this.MenuCard()
       }
       .width('100%')
 
-      Column({ space: 18 }) {
-        Row() {
-          ForEach(PROFILE_TOOLS.slice(0, 4), (item: ProfileTool) => {
-            this.ProfileToolItem(item)
-          }, (item: ProfileTool) => item.title)
-        }
-        .width('100%')
-
-        Row() {
-          ForEach(PROFILE_TOOLS.slice(4, 8), (item: ProfileTool) => {
-            this.ProfileToolItem(item)
-          }, (item: ProfileTool) => item.title)
-        }
-        .width('100%')
-
-        Row({ space: 8 }) {
-          Circle()
-            .width(8)
-            .height(8)
-            .fill(Theme.mobileRed)
-          Circle()
-            .width(8)
-            .height(8)
-            .fill('#D9DCE5')
-        }
-        .justifyContent(FlexAlign.Center)
-
-        Row({ space: 12 }) {
-          this.BookPlaceholder(52, 52, '#FFF0EC', false, false)
-          Text('阅读计划打卡、笔记沉淀、收藏整理都能在这里继续推进。')
-            .fontColor(Theme.mobileText)
+      if (this.showToast) {
+        Stack({ alignContent: Alignment.Center }) {
+          Text(this.toastText)
+            .fontColor('#FFFFFF')
             .fontSize(14)
-            .lineHeight(22)
-            .layoutWeight(1)
-          Text('>')
-            .fontColor('#CBD0DD')
-            .fontSize(22)
+            .padding({ left: 18, right: 18, top: 11, bottom: 11 })
+            .backgroundColor('rgba(25,25,25,0.78)')
+            .borderRadius(18)
         }
-        .padding(14)
-        .backgroundColor(Theme.mobileSurfaceSoft)
-        .borderRadius(16)
+        .width('100%')
+        .height(260)
+        .hitTestBehavior(HitTestMode.None)
       }
-      .width('100%')
-      .padding(18)
-      .backgroundColor(Theme.mobileSurface)
-      .borderRadius(24)
-      .shadow({ radius: 18, color: '#18000000', offsetX: 0, offsetY: 10 })
-
-      Row({ space: 12 }) {
-        this.IconOnlyButton($r('app.media.profile_help'))
-        Text('帮助与反馈')
-          .fontColor(Theme.mobileText)
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-        Blank()
-        Text('>')
-          .fontColor('#CBD0DD')
-          .fontSize(22)
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 18, bottom: 18 })
-      .backgroundColor(Theme.mobileSurface)
-      .borderRadius(22)
-      .shadow({ radius: 16, color: '#15000000', offsetX: 0, offsetY: 8 })
     }
     .width('100%')
   }
 
   @Builder
-  LevelBadge(text: string) {
-    Text(text)
-      .fontColor('#7A7E8B')
-      .fontSize(13)
-      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-      .backgroundColor('#F2F3F7')
-      .borderRadius(10)
-  }
+  TopTools() {
+    Row() {
+      Image($r('app.media.mobile_filter'))
+        .width(34)
+        .height(34)
+        .padding(4)
+        .onClick(() => openSettings())
 
-  @Builder
-  AccountStat(value: string, label: string) {
-    Column({ space: 8 }) {
-      Text(value)
-        .fontColor(Theme.mobileText)
-        .fontSize(this.isCompact() ? 24 : 28)
-        .fontWeight(FontWeight.Bold)
-      Text(label)
-        .fontColor(Theme.mobileSubtext)
-        .fontSize(14)
+      Blank()
     }
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
-  ProfileServiceCard(item: ProfileService) {
-    Row({ space: 12 }) {
-      Image(item.icon)
-        .width(42)
-        .height(42)
-      Column({ space: 5 }) {
-        Text(item.title)
-          .fontColor(Theme.mobileText)
-          .fontSize(18)
+  AccountHero() {
+    Row({ space: 16 }) {
+      Image($r('app.media.profile_avatar'))
+        .width(this.isCompact() ? 58 : 66)
+        .height(this.isCompact() ? 58 : 66)
+        .borderRadius(this.isCompact() ? 29 : 33)
+        .backgroundColor('#F3F5F8')
+
+      Column({ space: 7 }) {
+        Text(this.displayName())
+          .fontColor('#1F2430')
+          .fontSize(this.isCompact() ? 28 : 32)
           .fontWeight(FontWeight.Medium)
-        Text(item.subtitle)
-          .fontColor(Theme.mobileSubtext)
-          .fontSize(13)
-          .lineHeight(20)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.displaySubtitle())
+          .fontColor('#9AA0AE')
+          .fontSize(this.isCompact() ? 14 : 16)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
+
+      Text('›')
+        .fontColor('#C7CAD1')
+        .fontSize(42)
+        .fontWeight(FontWeight.Medium)
+        .width(34)
+        .textAlign(TextAlign.End)
     }
-    .layoutWeight(1)
-    .padding(16)
-    .backgroundColor(Theme.mobileSurface)
-    .borderRadius(22)
-    .shadow({ radius: 14, color: '#12000000', offsetX: 0, offsetY: 6 })
+    .width('100%')
+    .padding({ top: this.isCompact() ? 22 : 30, bottom: 12 })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => this.handleAccountTap())
   }
 
   @Builder
-  ProfileToolItem(item: ProfileTool) {
-    Column({ space: 10 }) {
-      Image(item.icon)
-        .width(28)
-        .height(28)
-      Text(item.title)
-        .fontColor(Theme.mobileText)
-        .fontSize(14)
-        .textAlign(TextAlign.Center)
-        .maxLines(1)
-    }
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Center)
-  }
-
-  @Builder
-  BookPlaceholder(widthValue: number, heightValue: number, tone: string, showRibbon: boolean, strongGlow: boolean) {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Stack({ alignContent: Alignment.BottomEnd }) {
-        Column()
-          .width(widthValue)
-          .height(heightValue)
-          .backgroundColor(tone)
-          .borderRadius(16)
-          .border({ width: 1, color: '#F0F1F5' })
-
-        Circle()
-          .width(widthValue * 0.72)
-          .height(widthValue * 0.72)
-          .fill(strongGlow ? '#FFFFFF' : '#F9FAFD')
-          .opacity(0.75)
-          .margin({ right: 10, bottom: 10 })
-
-        Column({ space: 7 }) {
-          Blank()
-            .width(widthValue * 0.56)
-            .height(5)
-            .borderRadius(3)
-            .backgroundColor('#FFFFFF')
-            .opacity(0.82)
-          Blank()
-            .width(widthValue * 0.42)
-            .height(5)
-            .borderRadius(3)
-            .backgroundColor('#FFFFFF')
-            .opacity(0.65)
+  MenuCard() {
+    Column() {
+      ForEach(this.menuItems(), (item: ProfileMenuItem, index: number) => {
+        Column() {
+          this.MenuRow(item)
+          if (index < this.menuItems().length - 1) {
+            Divider()
+              .height(0.5)
+              .color('#EEF0F4')
+              .margin({ left: 8 })
+          }
         }
-        .width(widthValue)
-        .height(heightValue)
-        .justifyContent(FlexAlign.Center)
-        .padding({ left: 14 })
-      }
-
-      if (showRibbon) {
-        Text('在读')
-          .fontColor(Theme.mobileSurface)
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Theme.mobileRed)
-          .borderRadius({ topLeft: 16, bottomRight: 12 })
-      }
+        .width('100%')
+      }, (item: ProfileMenuItem) => item.title)
     }
-    .width(widthValue)
-    .height(heightValue)
+    .width('100%')
+    .padding({ left: 22, right: 18 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(18)
   }
 
   @Builder
-  IconOnlyButton(icon: Resource) {
-    Stack() {
-      Circle()
-        .width(40)
-        .height(40)
-        .fill(Theme.mobileSurface)
-      Image(icon)
-        .width(20)
-        .height(20)
+  MenuRow(item: ProfileMenuItem) {
+    Row({ space: 12 }) {
+      Text(item.title)
+        .fontColor('#30333B')
+        .fontSize(this.isCompact() ? 20 : 22)
+        .layoutWeight(1)
+      if (this.loggedIn()) {
+        Text(`${item.count}`)
+          .fontColor('#9AA0AE')
+          .fontSize(15)
+      }
+      Text('›')
+        .fontColor('#D0D3DA')
+        .fontSize(28)
     }
-    .width(40)
-    .height(40)
+    .width('100%')
+    .height(this.isCompact() ? 68 : 76)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => this.handleMenu(item.action))
   }
 
   @Builder
-  NotificationButton() {
-    Stack({ alignContent: Alignment.TopEnd }) {
-      this.IconOnlyButton($r('app.media.mobile_bell'))
-      Circle()
-        .width(8)
-        .height(8)
-        .fill(Theme.mobileRed)
-        .margin({ top: 4, right: 4 })
-    }
+  StatusBanner(text: string, color: string) {
+    Text(text)
+      .fontColor('#FFFFFF')
+      .fontSize(13)
+      .lineHeight(18)
+      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+      .backgroundColor(color)
+      .borderRadius(8)
+      .width('100%')
   }
 }

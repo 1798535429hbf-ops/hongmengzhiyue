@@ -1,129 +1,52 @@
 import { ApiClient, RecommendResult } from '../common/ApiClient';
-import { RecommendationBook } from '../common/Models';
+import { Book, RecommendationBook, UserProfile } from '../common/Models';
+import { BookCover } from '../common/BookCover';
 import { openBookDetail, openSearch } from '../common/Navigation';
 import { Theme } from '../common/Theme';
-
-const USER_ID: number = 10086;
+import { UserSession } from '../common/UserSession';
 
 const STORE_TABS: string[] = ['精选', '男生', '女生', '出版', '听书', '漫画'];
-
-interface StoreBook {
-  id: number;
-  title: string;
-  author: string;
-  score: string;
-  quote: string;
-  tags?: string[];
-  coverTone: string;
-}
-
-const STORE_SECTION_BOOKS: Record<number, StoreBook[]> = {
-  0: [
-    {
-      id: 1, title: '余华作品集', author: '余华', score: '9.6分',
-      quote: '"我写这本书，不是为了控诉黑暗，而是为了，看见光明"', coverTone: '#F7EFE3',
-    },
-    {
-      id: 2, title: '活着', author: '余华', score: '9.8分',
-      quote: '人是为了活着本身而活着的，而不是为了活着之外的任何事物。', coverTone: '#EEF2FF',
-    },
-    {
-      id: 3, title: '三体全集（全3册）', author: '刘慈欣', score: '9.1分',
-      quote: '宇宙辽阔而生命短暂。', tags: ['科幻', '宇宙', '文明'], coverTone: '#E7EEFF',
-    },
-  ],
-  1: [
-    {
-      id: 11, title: '斗破苍穹', author: '天蚕土豆', score: '8.5分',
-      quote: '三十年河东，三十年河西，莫欺少年穷！', tags: ['玄幻', '热血'], coverTone: '#FFEFE8',
-    },
-    {
-      id: 12, title: '凡人修仙传', author: '忘语', score: '9.0分',
-      quote: '凡人亦可修仙，大道之行始于足下。', tags: ['仙侠', '升级流'], coverTone: '#EEF4FF',
-    },
-    {
-      id: 13, title: '全职高手', author: '蝴蝶蓝', score: '9.3分',
-      quote: '荣耀，从来都不是一个人的游戏。', tags: ['游戏', '热血'], coverTone: '#FFF2E6',
-    },
-    {
-      id: 14, title: '诡秘之主', author: '爱潜水的乌贼', score: '9.4分',
-      quote: '在漫长的黑暗中，总有一些光。', tags: ['奇幻', '悬疑'], coverTone: '#EEF0FF',
-    },
-  ],
-  2: [
-    {
-      id: 21, title: '何以笙箫默', author: '顾漫', score: '8.8分',
-      quote: '如果世界上曾经有那个人出现过，其他人都会变成将就。', coverTone: '#FFF0F0',
-    },
-    {
-      id: 22, title: '微微一笑很倾城', author: '顾漫', score: '8.6分',
-      quote: '如果我知道有一天我会这么爱你，我一定对你一见钟情。', coverTone: '#FFE8EE',
-    },
-    {
-      id: 23, title: '三生三世十里桃花', author: '唐七公子', score: '8.3分',
-      quote: '你有没有爱过一个人？你有没有恨过一个人？', tags: ['仙侠', '言情'], coverTone: '#FFF4F8',
-    },
-  ],
-  3: [
-    {
-      id: 31, title: '百年孤独', author: '加西亚·马尔克斯', score: '9.7分',
-      quote: '多年以后，面对行刑队，奥雷里亚诺·布恩迪亚上校...', tags: ['经典', '魔幻现实'], coverTone: '#F5F0E8',
-    },
-    {
-      id: 32, title: '小王子', author: '安托万·德·圣-埃克苏佩里', score: '9.5分',
-      quote: '真正重要的东西，用眼睛是看不见的。', tags: ['经典', '童话'], coverTone: '#FFEEDD',
-    },
-    {
-      id: 33, title: '围城', author: '钱钟书', score: '9.2分',
-      quote: '围在城里的人想逃出来，城外的人想冲进去。', tags: ['经典', '文学'], coverTone: '#EEF2FF',
-    },
-  ],
-  4: [
-    {
-      id: 41, title: '红楼梦（有声版）', author: '曹雪芹', score: '9.9分',
-      quote: '满纸荒唐言，一把辛酸泪。', tags: ['经典', '有声'], coverTone: '#EEE8F0',
-    },
-    {
-      id: 42, title: '盗墓笔记（广播剧）', author: '南派三叔', score: '9.0分',
-      quote: '比鬼神更可怕的，是人心。', tags: ['悬疑', '广播剧'], coverTone: '#EEF0F4',
-    },
-  ],
-  5: [
-    {
-      id: 51, title: '镖人', author: '许先哲', score: '9.3分',
-      quote: '大漠孤烟，刀客行走。', tags: ['漫画', '武侠'], coverTone: '#F5F0E0',
-    },
-    {
-      id: 52, title: '一人之下', author: '米二', score: '9.1分',
-      quote: '异人界的大门正向你打开。', tags: ['漫画', '奇幻'], coverTone: '#E8F0F8',
-    },
-    {
-      id: 53, title: '狐妖小红娘', author: '小新', score: '8.8分',
-      quote: '如果缘分有名字，一定是你的样子。', tags: ['漫画', '言情'], coverTone: '#FFF0F5',
-    },
-  ],
-};
 
 const STORE_QUICK_QUESTIONS: string[] = [
   '推荐适合我的书',
   '最近有什么好书',
-  '帮我制定阅读计划',
+  '根据我的画像制定阅读计划',
   '我要学人工智能',
 ];
 
 @Component
 export struct StoreContent {
   @Prop pageWidth: number = 390;
+  @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
   @State storeTabIndex: number = 0;
   @State storeAiQuery: string = '';
   @State storeAiAnswer: string = '';
   @State storeAiBusy: boolean = false;
   @State storeAiBooks: RecommendationBook[] = [];
+  @State storeAiThoughts: string[] = [];
   @State storeRecommendBooks: RecommendationBook[] = [];
   @State storeRecommendReason: string = '';
+  @State storeRecommendOffset: number = 0;
+  @State storeRecommendLoading: boolean = false;
+  @State storeSectionBooksData: Book[] = [];
+  @State storeSectionLoading: boolean = false;
+  @State storeSectionError: string = '';
+  @State storeSectionPage: number = 0;
 
   aboutToAppear(): void {
     this.loadStoreRecommendations();
+    this.loadStoreSection(true);
+  }
+
+  onSessionUserChange(): void {
+    this.storeRecommendBooks = [];
+    this.storeRecommendReason = '';
+    this.storeRecommendOffset = 0;
+    this.storeAiAnswer = '';
+    this.storeAiBooks = [];
+    this.storeAiThoughts = [];
+    this.loadStoreRecommendations(true);
+    this.loadStoreSection(true);
   }
 
   isCompact(): boolean {
@@ -134,29 +57,77 @@ export struct StoreContent {
     return this.isCompact() ? 16 : 18;
   }
 
-  storeSectionBooks(): StoreBook[] {
-    const books = STORE_SECTION_BOOKS[this.storeTabIndex];
-    if (books && books.length > 0) {
-      return books;
+  storeSectionKey(): string {
+    if (this.storeTabIndex === 1) {
+      return 'male';
     }
-    return STORE_SECTION_BOOKS[0];
+    if (this.storeTabIndex === 2) {
+      return 'female';
+    }
+    if (this.storeTabIndex === 3) {
+      return 'publish';
+    }
+    if (this.storeTabIndex === 4) {
+      return 'audio';
+    }
+    if (this.storeTabIndex === 5) {
+      return 'comic';
+    }
+    return 'featured';
+  }
+
+  storeSectionTitle(): string {
+    return STORE_TABS[this.storeTabIndex] || '精选';
+  }
+
+  async loadStoreSection(reset: boolean = false): Promise<void> {
+    if (this.storeSectionLoading) {
+      return;
+    }
+    const userId: number = UserSession.currentUserId();
+    this.storeSectionLoading = true;
+    this.storeSectionError = '';
+    if (reset) {
+      this.storeSectionPage = 0;
+      this.storeSectionBooksData = [];
+    }
+    try {
+      const books: Book[] = await ApiClient.storeBooks(this.storeSectionKey(), userId, this.storeSectionPage, 8);
+      this.storeSectionBooksData = books || [];
+      this.storeSectionPage += this.storeSectionBooksData.length > 0 ? 1 : 0;
+    } catch (err) {
+      this.storeSectionBooksData = [];
+      this.storeSectionError = `分区加载失败：${err}`;
+    } finally {
+      this.storeSectionLoading = false;
+    }
   }
 
   async askStoreAi(): Promise<void> {
     const query = this.storeAiQuery.trim();
     if (!query) {
-      this.storeAiAnswer = '请输入你想要了解的书籍类型或阅读问题。';
+      this.storeAiAnswer = '告诉我你最近想读的感觉、场景或者主题，我来帮你挑书。';
+      return;
+    }
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.storeAiAnswer = '先登录一下，我就能结合你的阅读偏好，直接替你挑出更顺手的书。';
+      this.storeAiBooks = [];
+      this.storeAiThoughts = [];
       return;
     }
     this.storeAiBusy = true;
     this.storeAiAnswer = '';
+    this.storeAiThoughts = [];
     try {
-      const result: RecommendResult = await ApiClient.recommend(USER_ID, query);
-      this.storeAiAnswer = result.reason || '为你找到以下推荐书籍';
+      const result: RecommendResult = await ApiClient.recommend(userId, this.buildAiRequestQuery(query));
+      this.storeAiAnswer = this.makeHumanRecommendation(result, query);
       this.storeAiBooks = result.book_list || [];
+      this.storeAiThoughts = this.buildRecommendationEvidence(result);
     } catch (err) {
-      this.storeAiAnswer = `推荐失败：${err}`;
+      this.storeAiAnswer = `我刚刚没把书找全，换个问法我再试一次。`;
       this.storeAiBooks = [];
+      this.storeAiThoughts = [];
     } finally {
       this.storeAiBusy = false;
     }
@@ -167,17 +138,34 @@ export struct StoreContent {
     await this.askStoreAi();
   }
 
-  async loadStoreRecommendations(): Promise<void> {
-    if (this.storeRecommendBooks.length > 0) {
+  async loadStoreRecommendations(reset: boolean = false): Promise<void> {
+    if (this.storeRecommendLoading) {
       return;
     }
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.storeRecommendBooks = [];
+      this.storeRecommendReason = '登录后，我会直接从书库里挑几本更像你会喜欢的书。';
+      return;
+    }
+    this.storeRecommendLoading = true;
+    if (reset) {
+      this.storeRecommendOffset = 0;
+    }
     try {
-      const result: RecommendResult = await ApiClient.recommend(USER_ID, '');
-      this.storeRecommendBooks = result.book_list || [];
-      this.storeRecommendReason = result.reason || '综合你的阅读历史和兴趣推荐';
+      const query: string = reset || this.storeRecommendOffset === 0 ? '' : `换一批 ${this.storeRecommendOffset}`;
+      const result: RecommendResult = await ApiClient.recommend(userId, query, this.storeRecommendOffset);
+      const normalized: RecommendationBook[] = result.book_list || [];
+      this.storeRecommendBooks = normalized;
+      this.storeRecommendReason = result.reason || (normalized.length > 0
+        ? this.pickRecommendationLead(normalized)
+        : '这批书刚好没命中，下次我换一组更贴近你当前阅读口味的。');
+      this.storeRecommendOffset += normalized.length > 0 ? normalized.length : 1;
     } catch (_) {
       this.storeRecommendBooks = [];
-      this.storeRecommendReason = '开始阅读和搜索后，这里会出现更贴近你的推荐。';
+      this.storeRecommendReason = '书库推荐暂时没拉到结果，稍后再试一次。';
+    } finally {
+      this.storeRecommendLoading = false;
     }
   }
 
@@ -232,6 +220,7 @@ export struct StoreContent {
           .borderRadius(16)
           .onClick(() => {
             this.storeTabIndex = index;
+            this.loadStoreSection(true);
           })
         }, (label: string) => label)
       }
@@ -254,7 +243,7 @@ export struct StoreContent {
 
           Row() {
             if (this.storeAiBusy) {
-              Text('AI 正在为你检索推荐结果...')
+              Text('我正在翻书库、看资料片段，再给你挑几本顺手的...')
                 .fontColor(Theme.mobileOrange)
                 .fontSize(this.isCompact() ? 16 : 17)
                 .fontWeight(FontWeight.Medium)
@@ -264,10 +253,10 @@ export struct StoreContent {
                 .fontColor(Theme.mobileText)
                 .fontSize(this.isCompact() ? 16 : 17)
                 .fontWeight(FontWeight.Medium)
-                .lineHeight(this.isCompact() ? 24 : 26)
-                .maxLines(4)
+                .lineHeight(this.isCompact() ? 25 : 27)
+                .maxLines(6)
             } else {
-              Text('你的专属 AI 阅读顾问\n告诉我你的阅读偏好，帮你精准找书')
+              Text('你的 AI 阅读顾问\n直接说想读什么，我会像朋友一样帮你挑书')
                 .fontColor(Theme.mobileText)
                 .fontSize(this.isCompact() ? 16 : 17)
                 .fontWeight(FontWeight.Medium)
@@ -275,12 +264,50 @@ export struct StoreContent {
             }
           }
           .layoutWeight(1)
-          .padding({ left: 18, right: 18, top: 16, bottom: 16 })
+          .padding({ left: 18, right: 18, top: 18, bottom: 18 })
           .backgroundColor('#FDFAF5')
-          .borderRadius(20)
+          .borderRadius(24)
           .border({ width: 1, color: '#F0E6D0' })
         }
-        .alignItems(VerticalAlign.Center)
+        .alignItems(VerticalAlign.Top)
+
+        if (this.storeAiThoughts.length > 0) {
+          Column({ space: 8 }) {
+            Row({ space: 6 }) {
+              Text('推荐依据')
+                .fontColor('#8A6A3F')
+                .fontSize(13)
+                .fontWeight(FontWeight.Bold)
+              Blank()
+              Text(this.storeAiBusy ? '整理中' : '已整理')
+                .fontColor(Theme.mobileOrange)
+                .fontSize(12)
+            }
+            ForEach(this.storeAiThoughts, (thought: string, index: number) => {
+              Row({ space: 8 }) {
+                Text(`${index + 1}`)
+                  .fontColor(Theme.mobileSurface)
+                  .fontSize(11)
+                  .fontWeight(FontWeight.Bold)
+                  .width(20)
+                  .height(20)
+                  .textAlign(TextAlign.Center)
+                  .backgroundColor(Theme.mobileOrange)
+                  .borderRadius(10)
+                Text(thought)
+                  .fontColor('#7C6B56')
+                  .fontSize(13)
+                  .lineHeight(19)
+                  .layoutWeight(1)
+              }
+            }, (thought: string) => thought)
+          }
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .backgroundColor('#FFF8EE')
+          .border({ width: 1, color: '#F0E1C8' })
+          .borderRadius(18)
+        }
 
         Text('今天想读点什么？')
           .fontColor(Theme.mobileText)
@@ -288,11 +315,11 @@ export struct StoreContent {
           .fontWeight(FontWeight.Medium)
 
         Row({ space: 10 }) {
-          TextInput({ placeholder: '输入书名、作者或关键词...', text: this.storeAiQuery })
+          TextInput({ placeholder: '比如：想读人工智能入门、最近压力大想看轻松小说...', text: this.storeAiQuery })
             .layoutWeight(1)
             .height('100%')
             .fontColor(Theme.mobileText)
-            .placeholderColor('#C0C4D0')
+            .placeholderColor('#C0B7A6')
             .fontSize(this.isCompact() ? 16 : 17)
             .backgroundColor('transparent')
             .border({ width: 0 })
@@ -304,12 +331,12 @@ export struct StoreContent {
             })
           Stack() {
             Circle()
-              .width(32)
-              .height(32)
+              .width(40)
+              .height(40)
               .fill(this.storeAiQuery.trim() ? Theme.mobileOrange : '#D2D4DB')
             Text('↑')
               .fontColor(Theme.mobileSurface)
-              .fontSize(18)
+              .fontSize(20)
               .fontWeight(FontWeight.Medium)
           }
           .onClick(() => {
@@ -317,11 +344,11 @@ export struct StoreContent {
           })
         }
         .width('100%')
-        .height(this.isCompact() ? 78 : 84)
-        .padding({ left: 18, right: 16 })
-        .backgroundColor(Theme.mobileSurface)
-        .border({ width: 1, color: Theme.mobileLine })
-        .borderRadius(18)
+        .height(this.isCompact() ? 104 : 116)
+        .padding({ left: 18, right: 16, top: 10, bottom: 10 })
+        .backgroundColor('#FFFDF8')
+        .border({ width: 1, color: '#EFE2D0' })
+        .borderRadius(24)
 
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
           ForEach(STORE_QUICK_QUESTIONS, (question: string) => {
@@ -343,7 +370,7 @@ export struct StoreContent {
 
         if (this.storeAiBooks.length > 0) {
           Column({ space: 10 }) {
-            Row({ space: 6 }) {
+            Row({ space: 8 }) {
               Row({}) {}
                 .width(3)
                 .height(16)
@@ -353,6 +380,10 @@ export struct StoreContent {
                 .fontColor(Theme.mobileText)
                 .fontSize(16)
                 .fontWeight(FontWeight.Bold)
+              Blank()
+              Text(this.storeAiBusy ? '更新中' : '已就绪')
+                .fontColor(Theme.mobileSubtext)
+                .fontSize(12)
             }
             ForEach(this.storeAiBooks, (rec: RecommendationBook) => {
               Row({ space: 12 }) {
@@ -364,7 +395,7 @@ export struct StoreContent {
                   Text(rec.author || '作者待补充')
                     .fontColor(Theme.mobileSubtext)
                     .fontSize(13)
-                  Text(rec.reason || 'AI推荐')
+                  Text(rec.reason || '这本和你刚才的想法很搭，可以先点进去看看简介。')
                     .fontColor(Theme.mobileBlue)
                     .fontSize(12)
                     .lineHeight(18)
@@ -400,22 +431,135 @@ export struct StoreContent {
 
       if (this.storeRecommendBooks.length > 0) {
         Column({ space: 14 }) {
-          this.SectionTitle('猜你喜欢', '换一批')
+          this.SectionTitle('猜你喜欢', this.storeRecommendLoading ? '换书中' : '换一批', 'recommend')
           ForEach(this.storeRecommendBooks, (rec: RecommendationBook) => {
             this.RecommendBookCard(rec)
           }, (rec: RecommendationBook) => `${rec.id}`)
         }
       }
 
-      this.SectionTitle('重磅推荐', '换一批')
+      if (this.storeSectionError) {
+        Text(this.storeSectionError)
+          .fontColor('#B45B47')
+          .fontSize(12)
+          .lineHeight(18)
+      }
 
-      ForEach(this.storeSectionBooks(), (book: StoreBook) => {
-        this.StoreBookCard(book)
-      }, (book: StoreBook) => `${book.id}`)
+      this.SectionTitle(this.storeSectionTitle(), this.storeSectionLoading ? '加载中' : '换一批', 'section')
 
-      this.StoreOfferCard()
+      if (this.storeSectionBooksData.length > 0) {
+        ForEach(this.storeSectionBooksData, (book: Book) => {
+          this.StoreBookCard(book)
+        }, (book: Book) => `${book.id}`)
+      } else {
+        Text(this.storeSectionLoading ? '正在从后端书库加载...' : '这个分区暂时没有真实入库书籍。')
+          .fontColor(Theme.mobileSubtext)
+          .fontSize(14)
+          .lineHeight(22)
+          .padding(18)
+          .backgroundColor(Theme.mobileSurface)
+          .borderRadius(18)
+      }
     }
     .width('100%')
+  }
+
+  pickRecommendationLead(books: RecommendationBook[]): string {
+    if (books.length <= 0) {
+      return '我先从书库里挑几本耐读的给你。';
+    }
+    return `这次先给你换成《${books[0].title}》这一组，想轻松读或深入读都能接上。`;
+  }
+
+  isPlanQuery(query: string): boolean {
+    return query.indexOf('计划') >= 0 || query.indexOf('持续读') >= 0 || query.indexOf('怎么读') >= 0;
+  }
+
+  profileSummary(): string {
+    const profile: UserProfile | null = UserSession.currentProfile();
+    if (!profile) {
+      return '';
+    }
+    const parts: string[] = [];
+    if (profile.major) {
+      parts.push(`专业：${profile.major}`);
+    }
+    if (profile.grade) {
+      parts.push(`年级：${profile.grade}`);
+    }
+    if (profile.interests) {
+      parts.push(`兴趣：${profile.interests}`);
+    }
+    if (profile.goal) {
+      parts.push(`目标：${profile.goal}`);
+    }
+    return parts.join('；');
+  }
+
+  buildAiRequestQuery(query: string): string {
+    const profileText: string = this.profileSummary();
+    if (this.isPlanQuery(query)) {
+      return `${query}。请结合用户画像给出可点击的阅读推荐，并在推荐理由或下一步建议中给出可执行的阅读计划安排；只基于后端书库和可追溯来源，不要编造书名或章节。${profileText ? `用户画像：${profileText}` : ''}`;
+    }
+    if (profileText) {
+      return `${query}。请结合用户画像进行阅读推荐，用户画像：${profileText}`;
+    }
+    return query;
+  }
+
+  makeHumanRecommendation(result: RecommendResult, query: string = ''): string {
+    const books = result.book_list || [];
+    if (books.length > 0) {
+      const second = books.length > 1 ? `，再把《${books[1].title}》作为对照读` : '';
+      const sourceText = (result.sources || []).length > 0 ? '后面点进伴读还能继续看参考依据。' : '';
+      const planText = this.isPlanQuery(query) && result.follow_up_suggestion ? ` 阅读计划：${result.follow_up_suggestion}` : '';
+      return `我推荐先读《${books[0].title}》${second}。${result.reason || '这一组书和你刚才说的方向比较贴近，难度和主题都比较好接上。'}${planText}${sourceText}`;
+    }
+    return result.reason || '这次没有找到足够合适的书，我先不硬凑书单。你可以补充专业、难度或用途，我再帮你缩小范围。';
+  }
+
+  buildRecommendationEvidence(result: RecommendResult): string[] {
+    const thoughts: string[] = [];
+    if ((result.book_list || []).length > 0) {
+      result.book_list.slice(0, 2).forEach((book: RecommendationBook) => {
+        thoughts.push(`《${book.title}》：${book.reason || '和你刚才说的方向比较贴近，可以先点进详情看看。'}`);
+      });
+    }
+    if ((result.sources || []).length > 0) {
+      thoughts.push(`参考依据已保留 ${result.sources.length} 条，点进伴读可以继续查证。`);
+    }
+    if (result.follow_up_suggestion) {
+      thoughts.push(`下一步：${result.follow_up_suggestion}`);
+    }
+    if (thoughts.length <= 0) {
+      thoughts.push(result.reason || '暂时没有足够依据生成书单。');
+    }
+    return thoughts.slice(0, 3);
+  }
+
+  async changeRecommendBatch(): Promise<void> {
+    await this.loadStoreRecommendations(false);
+  }
+
+  coverToneFor(rec: RecommendationBook): string {
+    return rec.coverColor || '#F5F0E8';
+  }
+
+  splitBookTags(raw: string): string[] {
+    if (!raw) {
+      return [];
+    }
+    return raw.split(/[，,、\/\s]+/).filter((tag: string) => !!tag.trim());
+  }
+
+  bookMetaLine(book: Book): string {
+    const chapterCount = book.chapterCount || 0;
+    const readable = book.readable === 1 || book.readable === true || chapterCount > 0;
+    const source = book.sourceType === 'local_txt' || book.sourceType === 'local_epub' ? '本地入库' : '云端书库';
+    if (readable) {
+      return `${source} · 可读 ${chapterCount} 章 · ${book.difficulty || '难度待定'}`;
+    }
+    return `${source} · ${book.importStatus || '待入库'} · ${book.difficulty || '难度待定'}`;
   }
 
   titleSize(): number {
@@ -426,9 +570,17 @@ export struct StoreContent {
   }
 
   @Builder
-  StoreBookCard(book: StoreBook) {
+  StoreBookCard(book: Book) {
     Row({ space: 16 }) {
-      this.BookPlaceholder(82, 118, book.coverTone, false, false)
+      BookCover({
+        bookId: book.id,
+        title: book.title,
+        difficulty: book.difficulty,
+        coverColor: book.coverColor || '#F5F0E8',
+        widthValue: 82,
+        heightValue: 118,
+        titleSize: 11,
+      })
 
       Column({ space: 8 }) {
         Text(book.title)
@@ -439,19 +591,19 @@ export struct StoreContent {
         Text(book.author)
           .fontColor(Theme.mobileSubtext)
           .fontSize(15)
-        Text(book.score)
+        Text(this.bookMetaLine(book))
           .fontColor(Theme.mobileOrange)
-          .fontSize(17)
+          .fontSize(14)
           .fontWeight(FontWeight.Medium)
-        Text(book.quote)
+        Text(book.summary || '这本书来自真实书库，可以进入详情查看章节、来源和伴读能力。')
           .fontColor(Theme.mobileSubtext)
           .fontSize(14)
           .lineHeight(22)
-          .maxLines(book.tags ? 2 : 3)
+          .maxLines(3)
 
-        if (book.tags && book.tags.length > 0) {
+        if (book.tags) {
           Row({ space: 8 }) {
-            ForEach(book.tags, (tag: string) => {
+            ForEach(this.splitBookTags(book.tags).slice(0, 3), (tag: string) => {
               Text(tag)
                 .fontColor(Theme.mobileSubtext)
                 .fontSize(13)
@@ -467,75 +619,9 @@ export struct StoreContent {
     }
     .width('100%')
     .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-  }
-
-  @Builder
-  StoreOfferCard() {
-    Column({ space: 16 }) {
-      Row() {
-        Text('今日限时特惠')
-          .fontColor('#7C4A1F')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-        Blank()
-        Row({ space: 6 }) {
-          Text('剩余')
-            .fontColor('#B98A5A')
-            .fontSize(14)
-          this.TimerBox('08')
-          Text(':')
-            .fontColor('#A07346')
-            .fontSize(16)
-          this.TimerBox('36')
-          Text(':')
-            .fontColor('#A07346')
-            .fontSize(16)
-          this.TimerBox('45')
-        }
-      }
-
-      Row({ space: 16 }) {
-        this.BookPlaceholder(86, 110, '#FFE7D5', false, false)
-
-        Column({ space: 10 }) {
-          Text('时间的玫瑰（全集）')
-            .fontColor(Theme.mobileText)
-            .fontSize(this.isCompact() ? 20 : 22)
-            .fontWeight(FontWeight.Bold)
-          Text('但德')
-            .fontColor(Theme.mobileSubtext)
-            .fontSize(15)
-          Row({ space: 10 }) {
-            Text('¥19.99')
-              .fontColor(Theme.mobileOrange)
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-            Text('¥59.99')
-              .fontColor('#C1B5B0')
-              .fontSize(16)
-              .decoration({ type: TextDecorationType.LineThrough, color: '#C1B5B0' })
-          }
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(16)
-    .backgroundColor('#FFF4EC')
-    .borderRadius(22)
-  }
-
-  @Builder
-  TimerBox(text: string) {
-    Text(text)
-      .fontColor('#865325')
-      .fontSize(15)
-      .fontWeight(FontWeight.Medium)
-      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-      .backgroundColor(Theme.mobileSurface)
-      .borderRadius(10)
+    .onClick(() => {
+      openBookDetail(book.id);
+    })
   }
 
   @Builder
@@ -545,7 +631,7 @@ export struct StoreContent {
         Column()
           .width(68)
           .height(92)
-          .backgroundColor('#F5F0E8')
+          .backgroundColor(this.coverToneFor(rec))
           .borderRadius(14)
           .border({ width: 1, color: '#E8DDCC' })
         Row({}) {}
@@ -586,7 +672,7 @@ export struct StoreContent {
             .height(14)
             .borderRadius(1)
             .backgroundColor(Theme.mobileOrange)
-          Text(rec.reason || (rec.difficulty ? `基于你的 ${rec.difficulty} 阅读偏好推荐` : '基于你的阅读记录为你推荐'))
+          Text(rec.reason || '这本和你刚才的想法很搭，可以先点进去看看简介。')
             .fontColor(Theme.mobileSubtext)
             .fontSize(13)
             .lineHeight(18)
@@ -618,7 +704,7 @@ export struct StoreContent {
   }
 
   @Builder
-  SectionTitle(title: string, action: string = '') {
+  SectionTitle(title: string, action: string = '', actionKind: string = '') {
     Row() {
       Text(title)
         .fontColor(Theme.mobileText)
@@ -628,10 +714,10 @@ export struct StoreContent {
       if (action) {
         Row({ space: 6 }) {
           Text(action)
-            .fontColor(Theme.mobileSubtext)
+            .fontColor(action === '加载中' || action === '换书中' ? '#C0B7A6' : Theme.mobileSubtext)
             .fontSize(15)
-          if (action === '换一批') {
-            Text('C')
+          if (action === '换一批' || action === '换书中') {
+            Text(action === '换书中' ? '…' : 'C')
               .fontColor(Theme.mobileSubtext)
               .fontSize(17)
               .fontWeight(FontWeight.Medium)
@@ -641,62 +727,20 @@ export struct StoreContent {
               .height(14)
           }
         }
+        .onClick(() => {
+          if (action === '加载中' || action === '换书中') {
+            return;
+          }
+          if (actionKind === 'recommend') {
+            this.changeRecommendBatch();
+          } else if (actionKind === 'section') {
+            this.loadStoreSection(false);
+          }
+        })
       }
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
-  }
-
-  @Builder
-  BookPlaceholder(widthValue: number, heightValue: number, tone: string, showRibbon: boolean, strongGlow: boolean) {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Stack({ alignContent: Alignment.BottomEnd }) {
-        Column()
-          .width(widthValue)
-          .height(heightValue)
-          .backgroundColor(tone)
-          .borderRadius(16)
-          .border({ width: 1, color: '#F0F1F5' })
-
-        Circle()
-          .width(widthValue * 0.72)
-          .height(widthValue * 0.72)
-          .fill(strongGlow ? '#FFFFFF' : '#F9FAFD')
-          .opacity(0.75)
-          .margin({ right: 10, bottom: 10 })
-
-        Column({ space: 7 }) {
-          Blank()
-            .width(widthValue * 0.56)
-            .height(5)
-            .borderRadius(3)
-            .backgroundColor('#FFFFFF')
-            .opacity(0.82)
-          Blank()
-            .width(widthValue * 0.42)
-            .height(5)
-            .borderRadius(3)
-            .backgroundColor('#FFFFFF')
-            .opacity(0.65)
-        }
-        .width(widthValue)
-        .height(heightValue)
-        .justifyContent(FlexAlign.Center)
-        .padding({ left: 14 })
-      }
-
-      if (showRibbon) {
-        Text('在读')
-          .fontColor(Theme.mobileSurface)
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Theme.mobileRed)
-          .borderRadius({ topLeft: 16, bottomRight: 12 })
-      }
-    }
-    .width(widthValue)
-    .height(heightValue)
   }
 
   @Builder

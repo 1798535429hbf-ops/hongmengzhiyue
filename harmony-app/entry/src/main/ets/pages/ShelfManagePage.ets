@@ -3,9 +3,8 @@ import { PlanItem } from '../common/Models';
 import { goBack } from '../common/Navigation';
 import { buildContinueItems, ShelfCardItem } from '../common/ShelfPresentation';
 import { ShelfStore } from '../common/ShelfStore';
+import { UserSession } from '../common/UserSession';
 import { common } from '@kit.AbilityKit';
-
-const USER_ID: number = 10086;
 
 const KEY_SHELF_DIRTY: string = 'shelf_manage_dirty_timestamp';
 
@@ -84,11 +83,14 @@ struct ShelfManagePage {
       return;
     }
     try {
-      const storeState = await ShelfStore.load(context);
+      const userId: number = UserSession.currentUserId();
+      const storeState = await ShelfStore.load(context, userId);
       let plans: PlanItem[] = [];
-      try {
-        plans = await ApiClient.listPlans(USER_ID);
-      } catch (_) {}
+      if (userId > 0) {
+        try {
+          plans = await ApiClient.listPlans(userId);
+        } catch (_) {}
+      }
       this.items = buildContinueItems(storeState, plans);
       this.dataVersion++;
       this.syncSelection();
@@ -208,7 +210,7 @@ struct ShelfManagePage {
 
     if (this.allSelectedArePinned()) {
       try {
-        const storeState = await ShelfStore.load(context);
+        const storeState = await ShelfStore.load(context, UserSession.currentUserId());
         const nextPinned: string[] = [];
         for (let i = 0; i < storeState.pinnedSourceKeys.length; i++) {
           if (!this.selectedKeys.includes(storeState.pinnedSourceKeys[i])) {
@@ -225,7 +227,7 @@ struct ShelfManagePage {
     }
 
     try {
-      const storeState = await ShelfStore.load(context);
+      const storeState = await ShelfStore.load(context, UserSession.currentUserId());
       const nextPinned: string[] = storeState.pinnedSourceKeys.slice();
       for (let i = 0; i < this.selectedKeys.length; i++) {
         if (!nextPinned.includes(this.selectedKeys[i])) {

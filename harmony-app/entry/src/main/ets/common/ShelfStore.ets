@@ -1,6 +1,9 @@
 import { common, Want, wantConstant } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
+import { util } from '@kit.ArkTS';
+import { ApiClient, ImportBookResult } from './ApiClient';
+import { UserSession } from './UserSession';
 
 const SHELF_PREFERENCES_NAME: string = 'smartread_shelf_store';
 const SHELF_STATE_KEY: string = 'shelf_state_json';
@@ -27,6 +30,7 @@ export interface RemoteShelfSession {
 
 export interface LocalShelfBook {
   key: string;
+  remoteBookId?: number;
   title: string;
   displayName: string;
   extension: string;
@@ -105,6 +109,11 @@ function emptyState(): ShelfStoreState {
       seconds: 0,
     },
   };
+}
+
+function stateKeyForUser(userId: number): string {
+  const suffix: string = userId > 0 ? `${userId}` : 'guest';
+  return `${SHELF_STATE_KEY}_${suffix}`;
 }
 
 function nowIso(): string {
@@ -192,6 +201,17 @@ function guessPreviewMode(extension: string): LocalPreviewMode {
   return 'external';
 }
 
+function sourceTypeForExtension(extension: string): string {
+  if (extension === 'epub') {
+    return 'local_epub';
+  }
+  return 'local_txt';
+}
+
+function canImportToBackend(extension: string): boolean {
+  return extension === 'txt' || extension === 'md' || extension === 'markdown' || extension === 'epub';
+}
+
 function historyTone(sourceType: ShelfSourceType, accent: string): string {
   if (sourceType === 'local') {
     return '#EEF4FF';
@@ -274,20 +294,32 @@ export class ShelfStore {
     return await preferences.getPreferences(context, SHELF_PREFERENCES_NAME);
   }
 
-  static async load(context: common.UIAbilityContext): Promise<ShelfStoreState> {
+  private static stateKey(userId: number = UserSession.currentUserId()): string {
+    return stateKeyForUser(userId);
+  }
+
+  static async load(context: common.UIAbilityContext, userId: number = UserSession.currentUserId()): Promise<ShelfStoreState> {
     const prefs = await ShelfStore.preferences(context);
-    const raw = await prefs.get(SHELF_STATE_KEY, '') as string;
+    let raw = await prefs.get(ShelfStore.stateKey(userId), '') as string;
+    if (!raw && userId === 10086) {
+      raw = await prefs.get(SHELF_STATE_KEY, '') as string;
+    }
     return parseState(raw);
   }
 
-  private static async save(context: common.UIAbilityContext, state: ShelfStoreState): Promise<void> {
+  private static async save(
+    context: common.UIAbilityContext,
+    state: ShelfStoreState,
+    userId: number = UserSession.currentUserId()
+  ): Promise<void> {
     const prefs = await ShelfStore.preferences(context);
-    await prefs.put(SHELF_STATE_KEY, JSON.stringify(state));
+    await prefs.put(ShelfStore.stateKey(userId), JSON.stringify(state));
     await prefs.flush();
   }
 
   static async recordRemoteBrowse(context: common.UIAbilityContext, payload: RemoteBrowsePayload): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     const updatedAt: string = payload.updatedAt || nowIso();
     const sourceKey: string = `remote:${payload.bookId}`;
     const historyKey: string = `history:${sourceKey}`;
@@ -320,11 +352,12 @@ export class ShelfStore {
       nextHistory.unshift(nextRecord);
     }
     state.browseHistory = ensureHistorySize(nextHistory);
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
   }
 
   static async recordRemoteReading(context: common.UIAbilityContext, payload: RemoteReadingPayload): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     const updatedAt: string = payload.updatedAt || nowIso();
     const sourceKey: string = `remote:${payload.bookId}`;
     const nextSession: RemoteShelfSession = {
@@ -379,12 +412,13 @@ export class ShelfStore {
       updatedAt,
     });
 
-    state.browseHistory = (await ShelfStore.load(context)).browseHistory;
-    await ShelfStore.save(context, state);
+    state.browseHistory = (await ShelfStore.load(context, userId)).browseHistory;
+    await ShelfStore.save(context, state, userId);
   }
 
   static async importLocalBooks(context: common.UIAbilityContext, sourceUris: string[]): Promise<LocalBookImportResult> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     const importDir: string = `${context.filesDir}/${SHELF_IMPORT_DIR}`;
     try {
       await fileIo.mkdir(importDir, true);
@@ -399,6 +433,10 @@ export class ShelfStore {
       try {
         const sourceFile = new fileUri.FileUri(sourceUri);
         const safeName: string = sanitizeFileName(sourceFile.name || `book-${Date.now()}.bin`);
+        const extension: string = lowerExtension(safeName);
+        if (!canImportToBackend(extension)) {
+          throw new Error('当前仅支持 TXT/MD 和 EPUB 入库解析；PDF/DOCX 暂不做静默导入。');
+        }
         let existed: LocalShelfBook | null = null;
         for (let index = 0; index < state.localBooks.length; index++) {
           if (state.localBooks[index].displayName === safeName) {
@@ -415,10 +453,11 @@ export class ShelfStore {
         const destinationPath: string = `${importDir}/${uniqueName}`;
         const destinationUri: string = fileUri.getUriFromPath(destinationPath);
         await fileIo.copy(sourceUri, destinationUri);
-
-        const extension: string = lowerExtension(safeName);
+        const importResult = await ShelfStore.importLocalBookToBackend(userId, safeName, extension, destinationPath);
+        const remoteBookId: number = importResult.bookId || importResult.book_id || 0;
         const nextBook: LocalShelfBook = {
           key: nextLocalKey(),
+          remoteBookId,
           title: baseTitle(safeName),
           displayName: safeName,
           extension,
@@ -431,8 +470,24 @@ export class ShelfStore {
           previewMode: guessPreviewMode(extension),
         };
         state.localBooks.unshift(nextBook);
+        if (remoteBookId > 0) {
+          state.remoteSessions.unshift({
+            key: `remote:${remoteBookId}`,
+            bookId: remoteBookId,
+            title: nextBook.title,
+            author: '本地导入',
+            tags: '本地导入,可读,AI伴读',
+            difficulty: '本地导入',
+            chapterId: '',
+            chapterTitle: '',
+            progress: 0,
+            updatedAt: nextBook.importedAt,
+            coverColor: '#EEF4FF',
+          });
+        }
         imported.push(nextBook);
-      } catch (_) {
+      } catch (err) {
+        throw new Error(`导入 ${sourceUri} 失败：${err}`);
       }
     }
 
@@ -447,16 +502,47 @@ export class ShelfStore {
         actionText: '导入到本地书架',
         updatedAt: item.importedAt,
         coverTone: historyTone('local', 'import'),
+        remoteBookId: item.remoteBookId,
         localBookKey: item.key,
       });
     }
     state.browseHistory = ensureHistorySize(state.browseHistory);
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
     return { imported, skipped };
   }
 
+  private static async importLocalBookToBackend(
+    userId: number,
+    fileName: string,
+    extension: string,
+    path: string
+  ): Promise<ImportBookResult> {
+    const sourceType: string = sourceTypeForExtension(extension);
+    if (sourceType === 'local_epub') {
+      const base64: string = ShelfStore.readFileAsBase64(path);
+      return await ApiClient.importBook(userId, fileName, sourceType, '', base64);
+    }
+    const content: string = fileIo.readTextSync(path);
+    return await ApiClient.importBook(userId, fileName, sourceType, content, '');
+  }
+
+  private static readFileAsBase64(path: string): string {
+    const file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+    try {
+      const stat = fileIo.statSync(path);
+      const size = Number(stat.size);
+      const data = new ArrayBuffer(size);
+      fileIo.readSync(file.fd, data);
+      const helper = new util.Base64Helper();
+      return helper.encodeToStringSync(new Uint8Array(data));
+    } finally {
+      fileIo.closeSync(file);
+    }
+  }
+
   static async openLocalBook(context: common.UIAbilityContext, bookKey: string): Promise<LocalShelfBook> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     let target: LocalShelfBook | null = null;
     for (let i = 0; i < state.localBooks.length; i++) {
       if (state.localBooks[i].key === bookKey) {
@@ -498,7 +584,11 @@ export class ShelfStore {
       nextHistory.unshift(nextRecord);
     }
     state.browseHistory = ensureHistorySize(nextHistory);
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
+
+    if (target.remoteBookId && target.remoteBookId > 0) {
+      return target;
+    }
 
     const openWant: Want = {
       action: 'ohos.want.action.viewData',
@@ -511,7 +601,8 @@ export class ShelfStore {
   }
 
   static async deleteHistoryRecords(context: common.UIAbilityContext, historyKeys: string[]): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     const nextHistory: ShelfHistoryRecord[] = [];
     for (let i = 0; i < state.browseHistory.length; i++) {
       let shouldDelete: boolean = false;
@@ -526,11 +617,12 @@ export class ShelfStore {
       }
     }
     state.browseHistory = nextHistory;
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
   }
 
   static async restoreHistoryBookToShelf(context: common.UIAbilityContext, historyKey: string): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     let target: ShelfHistoryRecord | null = null;
     for (let i = 0; i < state.browseHistory.length; i++) {
       if (state.browseHistory[i].key === historyKey) {
@@ -596,17 +688,19 @@ export class ShelfStore {
       }
     }
     state.hiddenRemoteBookIds = nextHiddenIds;
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
   }
 
   static async pinShelfItems(context: common.UIAbilityContext, sourceKeys: string[]): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     state.pinnedSourceKeys = sourceKeys.filter((key: string) => !!key);
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
   }
 
   static async markRemoteBooksDownloaded(context: common.UIAbilityContext, bookIds: number[]): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     const nextIds: number[] = state.downloadedRemoteBookIds.slice();
     for (let i = 0; i < bookIds.length; i++) {
       const bookId: number = bookIds[i];
@@ -615,7 +709,7 @@ export class ShelfStore {
       }
     }
     state.downloadedRemoteBookIds = nextIds;
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
   }
 
   static async addTodayReadingDuration(
@@ -623,26 +717,28 @@ export class ShelfStore {
     startedAtMs: number,
     endedAtMs: number = Date.now()
   ): Promise<number> {
+    const userId: number = UserSession.currentUserId();
     const safeEnd: number = Number.isFinite(endedAtMs) ? endedAtMs : Date.now();
     const safeStart: number = Number.isFinite(startedAtMs) ? startedAtMs : safeEnd;
     if (safeEnd <= safeStart) {
-      const currentState = await ShelfStore.load(context);
+      const currentState = await ShelfStore.load(context, userId);
       return currentState.todayReading.seconds;
     }
 
-    const state = await ShelfStore.load(context);
+    const state = await ShelfStore.load(context, userId);
     const todayStart: Date = new Date(safeEnd);
     todayStart.setHours(0, 0, 0, 0);
     const overlapStart: number = Math.max(safeStart, todayStart.getTime());
     const overlapSeconds: number = clampPositiveInteger((safeEnd - overlapStart) / 1000);
     state.todayReading = normalizeTodayReading(state.todayReading);
     state.todayReading.seconds = state.todayReading.seconds + overlapSeconds;
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
     return state.todayReading.seconds;
   }
 
   static async removeFromShelf(context: common.UIAbilityContext, sourceKeys: string[]): Promise<void> {
-    const state = await ShelfStore.load(context);
+    const userId: number = UserSession.currentUserId();
+    const state = await ShelfStore.load(context, userId);
     const nextRemoteSessions: RemoteShelfSession[] = [];
     const nextLocalBooks: LocalShelfBook[] = [];
     const nextHistory: ShelfHistoryRecord[] = [];
@@ -724,6 +820,6 @@ export class ShelfStore {
     state.hiddenRemoteBookIds = nextHiddenIds;
     state.pinnedSourceKeys = nextPinnedKeys;
     state.downloadedRemoteBookIds = nextDownloadedIds;
-    await ShelfStore.save(context, state);
+    await ShelfStore.save(context, state, userId);
   }
 }

@@ -32,6 +32,16 @@ def retrieve_chunks(query: str, book_id: Optional[int] = None, limit: int = 5) -
     rows = query_all(sql, params)
     if rows:
         return rows
+    if book_id:
+        return query_all("""
+            SELECT c.id AS chunk_id, c.book_id, b.title, b.author, c.source, c.chunk_text, c.chunk_index,
+                   b.difficulty, b.tags, b.target_reader
+            FROM book_chunk c
+            JOIN book b ON b.id = c.book_id
+            WHERE c.book_id = %s
+            ORDER BY c.chunk_index
+            LIMIT %s
+        """, [book_id, limit])
     return query_all("""
         SELECT c.id AS chunk_id, c.book_id, b.title, b.author, c.source, c.chunk_text, c.chunk_index,
                b.difficulty, b.tags, b.target_reader
@@ -46,9 +56,12 @@ def search_books(query: str, limit: int = 8) -> List[Dict[str, Any]]:
     pattern = f"%{query}%"
     return query_all("""
         SELECT id, isbn, title, author, tags, summary, difficulty,
-               target_reader AS targetReader, cover_color AS coverColor
+               target_reader AS targetReader, cover_color AS coverColor,
+               source_type AS sourceType, readable, import_status AS importStatus,
+               source_note AS sourceNote,
+               (SELECT COUNT(*) FROM book_chapter bc WHERE bc.book_id = book.id) AS chapterCount
         FROM book
         WHERE title LIKE %s OR author LIKE %s OR tags LIKE %s OR summary LIKE %s
-        ORDER BY id
+        ORDER BY readable DESC, id
         LIMIT %s
     """, [pattern, pattern, pattern, pattern, limit])
