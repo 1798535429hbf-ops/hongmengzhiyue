@@ -11,6 +11,10 @@
     {
       "name": "entry_desc",
       "value": "鸿蒙智阅入口"
+    },
+    {
+      "name": "camera_permission_reason",
+      "value": "用于书架页扫一扫识别图书条码或二维码"
     }
   ]
 }

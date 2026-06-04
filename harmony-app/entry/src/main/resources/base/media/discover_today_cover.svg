@@ -1,0 +1,12 @@
+<svg width="172" height="244" viewBox="0 0 172 244" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="172" height="244" rx="8" fill="#050505"/>
+  <rect x="1" y="1" width="170" height="242" rx="8" stroke="#302A21" stroke-width="2"/>
+  <text x="23" y="59" fill="#C58A3D" font-size="25" font-family="serif" font-weight="700">人类简史:</text>
+  <text x="36" y="84" fill="#8F6F43" font-size="10" font-family="serif">A BRIEF HISTORY OF HUMANKIND</text>
+  <ellipse cx="86" cy="130" rx="34" ry="44" fill="#1E1E1E" stroke="#756447" stroke-width="2"/>
+  <path d="M56 136C75 116 97 115 117 137" stroke="#B88645" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M70 126C77 136 92 144 105 129" stroke="#4F4538" stroke-width="2" stroke-linecap="round"/>
+  <text x="70" y="142" fill="#C58A3D" font-size="20" font-family="serif" font-weight="700">AD</text>
+  <text x="43" y="193" fill="#B48A52" font-size="10" font-family="serif">尤瓦尔·赫拉利</text>
+  <path d="M49 207H123" stroke="#7A5D32" stroke-width="1.4" stroke-linecap="round"/>
+</svg>

@@ -25,6 +25,7 @@ oh_modules/
 **/oh_modules/
 .idea/
 *.iml
+.worktrees/
 
 # Node / package managers
 node_modules/
@@ -43,6 +44,12 @@ template_render_word/
 Thumbs.db
 *.swp
 *.swo
+
+# Claude / Codex
+.claude/
+.superpowers/
+.worktrees/
+runtime-logs/
 
 # Logs
 *.log

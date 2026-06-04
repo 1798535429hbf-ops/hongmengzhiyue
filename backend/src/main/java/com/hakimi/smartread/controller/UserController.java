@@ -39,4 +39,19 @@ public class UserController {
     public ApiResponse<Map<String, Object>> saveProfile(@RequestBody Map<String, Object> payload) {
         return ApiResponse.ok(service.profile(payload));
     }
+
+    @PostMapping("/login")
+    public ApiResponse<Map<String, Object>> login(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.phoneLogin(payload));
+    }
+
+    @PostMapping("/register")
+    public ApiResponse<Map<String, Object>> register(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.phoneRegister(payload));
+    }
+
+    @PostMapping("/provider-login")
+    public ApiResponse<Map<String, Object>> providerLogin(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.providerLogin(payload));
+    }
 }

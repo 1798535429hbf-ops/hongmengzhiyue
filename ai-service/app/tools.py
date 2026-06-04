@@ -4,7 +4,7 @@ from .rag import search_books
 
 
 def tool_trace(name: str, status: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {"tool_name": name, "status": status, "payload": payload}
+    return {"tool": name, "tool_name": name, "status": status, "payload": payload}
 
 
 def search_books_tool(query: str) -> Dict[str, Any]:

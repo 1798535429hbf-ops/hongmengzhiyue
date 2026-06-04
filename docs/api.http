@@ -4,8 +4,24 @@ GET http://localhost:8080/api/health
 ### 图书搜索
 GET http://localhost:8080/api/books/search?keyword=人工智能&tag=入门&page=0&size=10
 
+### 书城分区
+GET http://localhost:8080/api/books/store?section=featured&userId=10086&page=0&size=8
+
 ### 图书详情
 GET http://localhost:8080/api/books/1
+
+### 本地 TXT/MD/EPUB 入库
+POST http://localhost:8080/api/import/books
+Content-Type: application/json
+
+{
+  "user_id": 10086,
+  "file_name": "考研英语写作笔记.txt",
+  "source_type": "local_txt",
+  "content": "第一章 写作素材\n\n考研英语写作需要主题素材、句式和限时输出训练。",
+  "tags": "本地导入,考研,英语",
+  "target_reader": "准备考研英语写作训练的学生"
+}
 
 ### 用户画像
 GET http://localhost:8080/api/users/profile?userId=10086
