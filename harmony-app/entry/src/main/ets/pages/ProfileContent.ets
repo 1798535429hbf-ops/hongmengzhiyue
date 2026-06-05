@@ -51,6 +51,9 @@ export struct ProfileContent {
   }
 
   displayName(): string {
+    if (this.loggedIn() && this.profile.nickname) {
+      return this.profile.nickname;
+    }
     if (!this.loggedIn()) {
       return '登录/注册';
     }
@@ -58,12 +61,19 @@ export struct ProfileContent {
   }
 
   displaySubtitle(): string {
+    if (this.loggedIn() && this.profile.intro) {
+      return this.profile.intro;
+    }
     if (!this.loggedIn()) {
       return '登录后同步收藏与浏览记录';
     }
     const major = this.profile.major || '未填写专业';
     const grade = this.profile.grade || '未填写年级';
     return `${major} · ${grade}`;
+  }
+
+  avatarSource(): string {
+    return this.profile.avatarUrl ? ApiClient.resourceUrl(this.profile.avatarUrl) : '';
   }
 
   menuItems(): ProfileMenuItem[] {
@@ -184,13 +194,26 @@ export struct ProfileContent {
   }
 
   @Builder
+  ProfileAvatar(size: number) {
+    if (this.avatarSource()) {
+      Image(this.avatarSource())
+        .width(size)
+        .height(size)
+        .borderRadius(size / 2)
+        .backgroundColor('#F3F5F8')
+    } else {
+      Image($r('app.media.profile_avatar'))
+        .width(size)
+        .height(size)
+        .borderRadius(size / 2)
+        .backgroundColor('#F3F5F8')
+    }
+  }
+
+  @Builder
   AccountHero() {
     Row({ space: 16 }) {
-      Image($r('app.media.profile_avatar'))
-        .width(this.isCompact() ? 58 : 66)
-        .height(this.isCompact() ? 58 : 66)
-        .borderRadius(this.isCompact() ? 29 : 33)
-        .backgroundColor('#F3F5F8')
+      this.ProfileAvatar(this.isCompact() ? 58 : 66)
 
       Column({ space: 7 }) {
         Text(this.displayName())

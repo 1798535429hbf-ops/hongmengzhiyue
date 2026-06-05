@@ -13,6 +13,16 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     mysql_host: str = os.getenv("MYSQL_HOST", "127.0.0.1")
@@ -24,6 +34,7 @@ class Settings:
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
     deepseek_thinking: str = os.getenv("DEEPSEEK_THINKING", "disabled")
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "2048"))
+    deepseek_temperature: float = env_float("DEEPSEEK_TEMPERATURE", 0.6)
     deepseek_use_proxy: bool = env_bool("DEEPSEEK_USE_PROXY", False)
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
 

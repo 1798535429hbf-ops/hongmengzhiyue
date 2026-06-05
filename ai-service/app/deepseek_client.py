@@ -17,7 +17,7 @@ class DeepSeekClient:
         request_json = {
             "model": settings.deepseek_model,
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": settings.deepseek_temperature,
             "response_format": {"type": "json_object"},
             "max_tokens": settings.deepseek_max_tokens,
         }

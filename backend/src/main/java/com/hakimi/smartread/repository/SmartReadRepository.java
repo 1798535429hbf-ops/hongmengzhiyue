@@ -39,6 +39,9 @@ public class SmartReadRepository {
         addColumnIfMissing("user", "account", "account VARCHAR(80) NULL AFTER id");
         addColumnIfMissing("user", "phone", "phone VARCHAR(80) NULL AFTER account");
         addColumnIfMissing("user", "password_hash", "password_hash VARCHAR(128) NOT NULL DEFAULT '' AFTER phone");
+        addColumnIfMissing("user", "nickname", "nickname VARCHAR(64) NOT NULL DEFAULT '' AFTER name");
+        addColumnIfMissing("user", "intro", "intro VARCHAR(255) NOT NULL DEFAULT '' AFTER goal");
+        addColumnIfMissing("user", "avatar_url", "avatar_url VARCHAR(500) NOT NULL DEFAULT '' AFTER intro");
         addColumnIfMissing("user", "status", "status VARCHAR(32) NOT NULL DEFAULT 'active' AFTER channels");
         jdbc.update("""
                 UPDATE `user`
@@ -51,6 +54,8 @@ public class SmartReadRepository {
         modifyColumnIfExists("user", "phone", "phone VARCHAR(80) NOT NULL");
         addIndexIfMissing("user", "uk_user_account", "ALTER TABLE `user` ADD UNIQUE KEY uk_user_account (account)");
         addIndexIfMissing("user", "uk_user_phone", "ALTER TABLE `user` ADD UNIQUE KEY uk_user_phone (phone)");
+        ensureReadingPlanUniqueIndex();
+        ensureReadingPlanSettingsSchema();
         dropColumnIfExists("user", "budget");
         ensureAnalyticsSchema();
         ensureBookMetadataSchema();
@@ -431,6 +436,8 @@ public class SmartReadRepository {
     public Map<String, Object> findPlanForBook(long userId, long bookId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT p.id, p.user_id AS userId, p.book_id AS bookId, p.target_days AS targetDays,
+                       p.daily_minutes_target AS dailyMinutesTarget,
+                       p.weekly_minutes_target AS weeklyMinutesTarget,
                        p.progress, p.status, p.chapter_id AS chapterId, p.scroll_offset AS scrollOffset,
                        p.created_at AS createdAt, p.updated_at AS updatedAt,
                        b.title, b.author, b.difficulty, b.cover_color AS coverColor
@@ -489,7 +496,8 @@ public class SmartReadRepository {
 
     public Map<String, Object> findProfile(long userId) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT id, account, phone, name, major, grade, interests, goal, channels
+                SELECT id, account, phone, name, nickname, major, grade, interests, goal,
+                       intro, avatar_url AS avatarUrl, channels
                 FROM `user` WHERE id = ?
                 """, userId);
         if (rows.isEmpty()) {
@@ -500,20 +508,29 @@ public class SmartReadRepository {
 
     public Map<String, Object> upsertProfile(long userId, String name, String major, String grade,
                                              String interests, String goal, String channels) {
+        return upsertProfile(userId, name, name, major, grade, interests, goal, "", "", channels);
+    }
+
+    public Map<String, Object> upsertProfile(long userId, String name, String nickname, String major, String grade,
+                                             String interests, String goal, String intro, String avatarUrl,
+                                             String channels) {
         jdbc.update("""
-                INSERT INTO `user` (id, account, phone, password_hash, name, major, grade, interests, goal, channels)
-                VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?)
+                INSERT INTO `user` (id, account, phone, password_hash, name, nickname, major, grade, interests, goal, intro, avatar_url, channels)
+                VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
-                  name = VALUES(name), major = VALUES(major), grade = VALUES(grade),
+                  name = VALUES(name), nickname = VALUES(nickname), major = VALUES(major), grade = VALUES(grade),
                   interests = VALUES(interests), goal = VALUES(goal),
+                  intro = VALUES(intro), avatar_url = CASE WHEN VALUES(avatar_url) = '' THEN avatar_url ELSE VALUES(avatar_url) END,
                   channels = VALUES(channels)
-                """, userId, String.valueOf(userId), String.valueOf(userId), name, major, grade, interests, goal, channels);
+                """, userId, String.valueOf(userId), String.valueOf(userId), name, nickname, major, grade,
+                interests, goal, intro, avatarUrl, channels);
         return findProfile(userId);
     }
 
     public Map<String, Object> findUserByPhone(String phone) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT id, account, phone, password_hash AS passwordHash, name, major, grade, interests, goal, channels, status
+                SELECT id, account, phone, password_hash AS passwordHash, name, nickname, major, grade,
+                       interests, goal, intro, avatar_url AS avatarUrl, channels, status
                 FROM `user`
                 WHERE phone = ?
                 LIMIT 1
@@ -523,7 +540,8 @@ public class SmartReadRepository {
 
     public Map<String, Object> findUserByAccount(String account) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT id, account, phone, password_hash AS passwordHash, name, major, grade, interests, goal, channels, status
+                SELECT id, account, phone, password_hash AS passwordHash, name, nickname, major, grade,
+                       interests, goal, intro, avatar_url AS avatarUrl, channels, status
                 FROM `user`
                 WHERE account = ?
                 LIMIT 1
@@ -550,18 +568,19 @@ public class SmartReadRepository {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement("""
-                    INSERT INTO `user` (account, phone, password_hash, name, major, grade, interests, goal, channels)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO `user` (account, phone, password_hash, name, nickname, major, grade, interests, goal, channels)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, account);
             ps.setString(2, phone);
             ps.setString(3, passwordHash == null ? "" : passwordHash);
             ps.setString(4, name);
-            ps.setString(5, major);
-            ps.setString(6, grade);
-            ps.setString(7, interests);
-            ps.setString(8, goal);
-            ps.setString(9, channels);
+            ps.setString(5, name);
+            ps.setString(6, major);
+            ps.setString(7, grade);
+            ps.setString(8, interests);
+            ps.setString(9, goal);
+            ps.setString(10, channels);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -611,6 +630,10 @@ public class SmartReadRepository {
         jdbc.update("INSERT IGNORE INTO favorite (user_id, book_id) VALUES (?, ?)", userId, bookId);
     }
 
+    public int deleteFavorite(long userId, long bookId) {
+        return jdbc.update("DELETE FROM favorite WHERE user_id = ? AND book_id = ?", userId, bookId);
+    }
+
     public List<Map<String, Object>> listFavorites(long userId) {
         return jdbc.queryForList("""
                 SELECT b.id, b.isbn, b.title, b.author, b.tags, b.category, b.summary, b.difficulty,
@@ -629,32 +652,65 @@ public class SmartReadRepository {
     }
 
     public long createPlan(long userId, long bookId, int targetDays) {
-        KeyHolder keyHolder = new GeneratedKeyHolder();
-        jdbc.update(connection -> {
-            PreparedStatement ps = connection.prepareStatement("""
-                    INSERT INTO reading_plan (user_id, book_id, target_days, progress, status)
-                    VALUES (?, ?, ?, 0, 'active')
-                    """, Statement.RETURN_GENERATED_KEYS);
-            ps.setLong(1, userId);
-            ps.setLong(2, bookId);
-            ps.setInt(3, targetDays);
-            return ps;
-        }, keyHolder);
-        Number key = keyHolder.getKey();
+        return createPlan(userId, bookId, targetDays, 30, 210);
+    }
+
+    public long createPlan(long userId, long bookId, int targetDays, int dailyMinutesTarget, int weeklyMinutesTarget) {
+        jdbc.update("""
+                INSERT INTO reading_plan
+                  (user_id, book_id, target_days, daily_minutes_target, weekly_minutes_target, progress, status)
+                VALUES (?, ?, ?, ?, ?, 0, 'active')
+                ON DUPLICATE KEY UPDATE
+                  target_days = VALUES(target_days),
+                  daily_minutes_target = VALUES(daily_minutes_target),
+                  weekly_minutes_target = VALUES(weekly_minutes_target),
+                  status = CASE WHEN status = 'finished' THEN 'active' ELSE status END,
+                  updated_at = CURRENT_TIMESTAMP
+                """, userId, bookId, targetDays,
+                Math.max(1, dailyMinutesTarget), Math.max(1, weeklyMinutesTarget));
+        Number key = jdbc.queryForObject("""
+                SELECT id FROM reading_plan WHERE user_id = ? AND book_id = ? LIMIT 1
+                """, Number.class, userId, bookId);
         return key == null ? 0 : key.longValue();
     }
 
-    public int updatePlan(long userId, long planId, int progress, String status, String chapterId, int scrollOffset) {
+    public int deletePlan(long userId, long planId) {
+        return jdbc.update("DELETE FROM reading_plan WHERE user_id = ? AND id = ?", userId, planId);
+    }
+
+    public int deletePlanByBook(long userId, long bookId) {
+        return jdbc.update("DELETE FROM reading_plan WHERE user_id = ? AND book_id = ?", userId, bookId);
+    }
+
+    public int updatePlan(long userId, long planId, int progress, String status, String chapterId, int scrollOffset,
+                          Integer dailyMinutesTarget, Integer weeklyMinutesTarget) {
         return jdbc.update("""
                 UPDATE reading_plan
-                SET progress = ?, status = ?, chapter_id = ?, scroll_offset = ?, updated_at = CURRENT_TIMESTAMP
+                SET progress = ?, status = ?, chapter_id = ?, scroll_offset = ?,
+                    daily_minutes_target = COALESCE(?, daily_minutes_target),
+                    weekly_minutes_target = COALESCE(?, weekly_minutes_target),
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND user_id = ?
-                """, Math.max(0, Math.min(progress, 100)), status, chapterId, Math.max(0, scrollOffset), planId, userId);
+                """,
+                Math.max(0, Math.min(progress, 100)),
+                status,
+                chapterId,
+                Math.max(0, scrollOffset),
+                dailyMinutesTarget == null ? null : Math.max(1, dailyMinutesTarget),
+                weeklyMinutesTarget == null ? null : Math.max(1, weeklyMinutesTarget),
+                planId,
+                userId);
+    }
+
+    public int updatePlan(long userId, long planId, int progress, String status, String chapterId, int scrollOffset) {
+        return updatePlan(userId, planId, progress, status, chapterId, scrollOffset, null, null);
     }
 
     public List<Map<String, Object>> listPlans(long userId) {
         return jdbc.queryForList("""
                 SELECT p.id, p.user_id AS userId, p.book_id AS bookId, p.target_days AS targetDays,
+                       p.daily_minutes_target AS dailyMinutesTarget,
+                       p.weekly_minutes_target AS weeklyMinutesTarget,
                        p.progress, p.status, p.chapter_id AS chapterId, p.scroll_offset AS scrollOffset,
                        p.created_at AS createdAt, p.updated_at AS updatedAt,
                        b.title, b.author, b.difficulty, b.cover_color AS coverColor
@@ -779,6 +835,26 @@ public class SmartReadRepository {
         for (Map<String, Object> event : events) {
             saveBehaviorEvent(event);
         }
+    }
+
+    public Map<String, Object> readingStats(long userId) {
+        Number todaySeconds = jdbc.queryForObject("""
+                SELECT COALESCE(SUM(duration_seconds), 0)
+                FROM user_behavior_event
+                WHERE user_id = ? AND event_type = 'READING_SESSION_END' AND DATE(created_at) = CURDATE()
+                """, Number.class, userId);
+        List<Map<String, Object>> daily = jdbc.queryForList("""
+                SELECT DATE(created_at) AS day, COALESCE(SUM(duration_seconds), 0) AS seconds
+                FROM user_behavior_event
+                WHERE user_id = ? AND event_type = 'READING_SESSION_END'
+                  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+                GROUP BY DATE(created_at)
+                ORDER BY day
+                """, userId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("todaySeconds", todaySeconds == null ? 0 : todaySeconds.longValue());
+        result.put("dailySeconds", daily);
+        return result;
     }
 
     public Map<String, Object> findProfileAnalysis(long userId) {
@@ -1167,6 +1243,27 @@ public class SmartReadRepository {
         if (count == null || count <= 0) {
             jdbc.execute(ddl);
         }
+    }
+
+    private void ensureReadingPlanUniqueIndex() {
+        addIndexIfMissing("reading_plan", "idx_reading_plan_user_book_cleanup",
+                "ALTER TABLE reading_plan ADD KEY idx_reading_plan_user_book_cleanup (user_id, book_id, updated_at)");
+        jdbc.update("""
+                DELETE rp FROM reading_plan rp
+                JOIN reading_plan newer
+                  ON newer.user_id = rp.user_id
+                 AND newer.book_id = rp.book_id
+                 AND (newer.updated_at > rp.updated_at OR (newer.updated_at = rp.updated_at AND newer.id > rp.id))
+                """);
+        addIndexIfMissing("reading_plan", "uk_reading_plan_user_book",
+                "ALTER TABLE reading_plan ADD UNIQUE KEY uk_reading_plan_user_book (user_id, book_id)");
+    }
+
+    private void ensureReadingPlanSettingsSchema() {
+        addColumnIfMissing("reading_plan", "daily_minutes_target",
+                "daily_minutes_target INT NOT NULL DEFAULT 30 AFTER target_days");
+        addColumnIfMissing("reading_plan", "weekly_minutes_target",
+                "weekly_minutes_target INT NOT NULL DEFAULT 210 AFTER daily_minutes_target");
     }
 
     private static Long nullableLong(Map<String, Object> map, String key) {

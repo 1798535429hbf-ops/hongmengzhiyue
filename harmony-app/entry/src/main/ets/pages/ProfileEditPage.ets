@@ -4,6 +4,7 @@ import { goBack } from '../common/Navigation';
 import { Theme } from '../common/Theme';
 import { UserSession } from '../common/UserSession';
 import { common } from '@kit.AbilityKit';
+import { picker } from '@kit.CoreFileKit';
 
 @Entry
 @Component
@@ -12,6 +13,7 @@ struct ProfileEditPage {
   @State profile: UserProfile = emptyProfile();
   @State nickname: string = '';
   @State intro: string = '';
+  @State avatarUrl: string = '';
   @State busyText: string = '';
   @State errorText: string = '';
   @State toastText: string = '';
@@ -29,6 +31,10 @@ struct ProfileEditPage {
     return this.pageWidth < 360;
   }
 
+  avatarSource(): string {
+    return this.avatarUrl ? ApiClient.resourceUrl(this.avatarUrl) : '';
+  }
+
   async loadProfile(): Promise<void> {
     const userId = UserSession.currentUserId();
     if (userId <= 0) {
@@ -36,6 +42,7 @@ struct ProfileEditPage {
       this.profile = emptyProfile();
       this.nickname = '';
       this.intro = '';
+      this.avatarUrl = '';
       return;
     }
     this.busyText = '正在加载资料';
@@ -43,12 +50,14 @@ struct ProfileEditPage {
     try {
       const bundle = await ApiClient.profile(userId);
       this.profile = bundle.profile || UserSession.currentProfile() || emptyProfile();
-      this.nickname = this.profile.name || '';
-      this.intro = this.profile.goal || '';
+      this.nickname = this.profile.nickname || this.profile.name || '';
+      this.intro = this.profile.intro || '';
+      this.avatarUrl = this.profile.avatarUrl || '';
     } catch (err) {
       this.profile = UserSession.currentProfile() || emptyProfile();
-      this.nickname = this.profile.name || '';
-      this.intro = this.profile.goal || '';
+      this.nickname = this.profile.nickname || this.profile.name || '';
+      this.intro = this.profile.intro || '';
+      this.avatarUrl = this.profile.avatarUrl || '';
       this.errorText = `资料加载失败：${err}`;
     } finally {
       this.busyText = '';
@@ -61,7 +70,8 @@ struct ProfileEditPage {
       this.flashToast('当前页面上下文不可用');
       return;
     }
-    if (UserSession.currentUserId() <= 0) {
+    const userId = UserSession.currentUserId();
+    if (userId <= 0) {
       this.flashToast('请先登录');
       return;
     }
@@ -75,24 +85,80 @@ struct ProfileEditPage {
     this.errorText = '';
     try {
       const draft: UserProfile = {
-        id: this.profile.id,
-        account: this.profile.account || String(this.profile.id),
+        id: userId,
+        account: this.profile.account || String(userId),
         phone: this.profile.phone || '',
         name: nextName,
+        nickname: nextName,
         major: this.profile.major || '',
         grade: this.profile.grade || '',
         interests: this.profile.interests || '',
-        goal: nextIntro || this.profile.goal || '',
+        goal: this.profile.goal || '',
+        intro: nextIntro,
+        avatarUrl: this.avatarUrl || this.profile.avatarUrl || '',
         channels: this.profile.channels || '',
       };
       const saved = await ApiClient.saveProfile(draft);
       this.profile = saved;
-      this.nickname = saved.name || '';
-      this.intro = saved.goal || '';
+      this.nickname = saved.nickname || saved.name || '';
+      this.intro = saved.intro || '';
+      this.avatarUrl = saved.avatarUrl || '';
       await UserSession.persist(context, saved);
       this.flashToast('资料已保存');
     } catch (err) {
       this.errorText = `保存失败：${err}`;
+    } finally {
+      this.busyText = '';
+    }
+  }
+
+  async pickAvatar(): Promise<void> {
+    const context = this.hostContext();
+    const userId = UserSession.currentUserId();
+    if (!context || userId <= 0) {
+      this.flashToast('\u8bf7\u5148\u767b\u5f55');
+      return;
+    }
+    const photoPicker = new picker.PhotoViewPicker();
+    const options = new picker.PhotoSelectOptions();
+    options.MIMEType = picker.PhotoViewMIMETypes.IMAGE_TYPE;
+    options.maxSelectNumber = 1;
+    try {
+      const result = await photoPicker.select(options);
+      if (!result.photoUris || result.photoUris.length === 0) {
+        return;
+      }
+      this.busyText = '\u6b63\u5728\u4e0a\u4f20\u5934\u50cf';
+      this.errorText = '';
+      const uploadedUrl = await ApiClient.uploadAvatar(userId, result.photoUris[0]);
+      if (!uploadedUrl) {
+        this.flashToast('\u5934\u50cf\u4e0a\u4f20\u672a\u8fd4\u56de\u5730\u5740');
+        return;
+      }
+      this.avatarUrl = uploadedUrl;
+      const nextProfile: UserProfile = {
+        id: userId,
+        account: this.profile.account || String(userId),
+        phone: this.profile.phone || '',
+        name: this.nickname.trim() || this.profile.name || `User ${userId}`,
+        nickname: this.nickname.trim() || this.profile.nickname || this.profile.name || `User ${userId}`,
+        major: this.profile.major || '',
+        grade: this.profile.grade || '',
+        interests: this.profile.interests || '',
+        goal: this.profile.goal || '',
+        intro: this.intro.trim(),
+        avatarUrl: uploadedUrl,
+        channels: this.profile.channels || '',
+      };
+      const saved = await ApiClient.saveProfile(nextProfile);
+      this.profile = saved;
+      this.nickname = saved.nickname || saved.name || this.nickname;
+      this.intro = saved.intro || this.intro;
+      this.avatarUrl = saved.avatarUrl || uploadedUrl;
+      await UserSession.persist(context, saved);
+      this.flashToast('\u5934\u50cf\u5df2\u66f4\u65b0');
+    } catch (err) {
+      this.errorText = `\u5934\u50cf\u4e0a\u4f20\u5931\u8d25\uff1a${err}`;
     } finally {
       this.busyText = '';
     }
@@ -193,6 +259,23 @@ struct ProfileEditPage {
   }
 
   @Builder
+  AvatarImage() {
+    if (this.avatarSource()) {
+      Image(this.avatarSource())
+        .width(54)
+        .height(54)
+        .borderRadius(27)
+        .backgroundColor('#F4F5F7')
+    } else {
+      Image($r('app.media.profile_avatar'))
+        .width(54)
+        .height(54)
+        .borderRadius(27)
+        .backgroundColor('#F4F5F7')
+    }
+  }
+
+  @Builder
   AvatarRow() {
     Row() {
       Text('头像')
@@ -200,11 +283,7 @@ struct ProfileEditPage {
         .fontSize(this.isCompact() ? 23 : 26)
         .layoutWeight(1)
 
-      Image($r('app.media.profile_avatar'))
-        .width(54)
-        .height(54)
-        .borderRadius(27)
-        .backgroundColor('#F4F5F7')
+      this.AvatarImage()
 
       Text('›')
         .fontColor('#B8BCC5')
@@ -216,6 +295,7 @@ struct ProfileEditPage {
     .height(92)
     .alignItems(VerticalAlign.Center)
     .border({ width: { bottom: 0.5 }, color: '#EEF0F4' })
+    .onClick(() => this.pickAvatar())
   }
 
   @Builder

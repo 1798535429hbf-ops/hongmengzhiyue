@@ -26,6 +26,7 @@ def health() -> Dict[str, str]:
         "service": "hongmeng-zhiyue-ai",
         "status": "UP",
         "model": settings.deepseek_model,
+        "temperature": str(settings.deepseek_temperature),
         "thinking": settings.deepseek_thinking,
         "use_proxy": str(settings.deepseek_use_proxy).lower(),
     }

@@ -7,6 +7,7 @@ import {
   PlanItem,
   ProfileBundle,
   ReaderBundle,
+  ReadingStats,
   ReadingChapter,
   ReadingContent,
   ReadingProgress,
@@ -21,6 +22,7 @@ const API_BASE_URLS: string[] = [
   'http://192.168.123.89:8081/api',
 ];
 const API_ERROR_PREFIX: string = '__API_ERROR__:';
+let activeApiBaseUrl: string = API_BASE_URLS[0];
 
 function isRouteMissingMessage(message: string): boolean {
   return message.includes('No static resource') || message.includes('404') || message.includes('Not Found');
@@ -49,6 +51,13 @@ export interface ChatResult {
   sources: SourceRef[];
   follow_up_suggestion: string;
   llm_status: string;
+}
+
+export interface ChatOptions {
+  chapterId?: string;
+  paragraph?: string;
+  allowExternalSearch?: boolean;
+  tone?: string;
 }
 
 export interface CommerceBundle {
@@ -84,15 +93,26 @@ interface ChatRequest {
   user_id: number;
   book_id: number;
   question: string;
+  chapter_id?: string;
+  paragraph?: string;
+  allow_external_search?: boolean;
+  tone?: string;
   response_mode?: string;
   require_sources?: boolean;
   allow_partial_answer?: boolean;
+}
+
+export interface PlanTargetOptions {
+  dailyMinutesTarget?: number;
+  weeklyMinutesTarget?: number;
 }
 
 interface CreatePlanRequest {
   user_id: number;
   book_id: number;
   target_days: number;
+  daily_minutes_target?: number;
+  weekly_minutes_target?: number;
 }
 
 interface SaveNoteRequest {
@@ -112,10 +132,13 @@ interface SaveProfileRequest {
   account: string;
   phone: string;
   name: string;
+  nickname?: string;
   major: string;
   grade: string;
   interests: string;
   goal: string;
+  intro?: string;
+  avatarUrl?: string;
   channels: string;
 }
 
@@ -152,6 +175,8 @@ interface UpdateProgressRequest {
   progress: number;
   scroll_offset: number;
   status: string;
+  daily_minutes_target?: number;
+  weekly_minutes_target?: number;
 }
 
 interface ImportBookRequest {
@@ -174,6 +199,23 @@ interface RebuildProfileAnalysisRequest {
 }
 
 export class ApiClient {
+  private static markActiveBaseUrl(baseUrl: string): void {
+    if (baseUrl) {
+      activeApiBaseUrl = baseUrl;
+    }
+  }
+
+  static resourceUrl(path: string): string {
+    if (!path) {
+      return '';
+    }
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return path;
+    }
+    const base = activeApiBaseUrl.replace(/\/api$/, '');
+    return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  }
+
   private static isWeakAiStatus(status: string): boolean {
     const normalized: string = (status || '').toLowerCase();
     return normalized.includes('parse') || normalized.includes('parser') || normalized.includes('blocked') ||
@@ -347,11 +389,15 @@ export class ApiClient {
     return ApiClient.recommendFromRealBooks(query, books);
   }
 
-  static async chat(userId: number, bookId: number, question: string): Promise<ChatResult> {
+  static async chat(userId: number, bookId: number, question: string, options: ChatOptions = {}): Promise<ChatResult> {
     const payload: ChatRequest = {
       user_id: userId,
       book_id: bookId,
       question,
+      chapter_id: options.chapterId || '',
+      paragraph: options.paragraph || '',
+      allow_external_search: options.allowExternalSearch === undefined ? true : options.allowExternalSearch,
+      tone: options.tone || 'warm_companion',
       response_mode: 'strict_json_grounded',
       require_sources: true,
       allow_partial_answer: true,
@@ -377,13 +423,23 @@ export class ApiClient {
     };
   }
 
-  static async createPlan(userId: number, bookId: number, targetDays: number = 14): Promise<object> {
-    const payload: CreatePlanRequest = { user_id: userId, book_id: bookId, target_days: targetDays };
+  static async createPlan(userId: number, bookId: number, targetDays: number = 14, options: PlanTargetOptions = {}): Promise<object> {
+    const payload: CreatePlanRequest = {
+      user_id: userId,
+      book_id: bookId,
+      target_days: targetDays,
+      daily_minutes_target: options.dailyMinutesTarget,
+      weekly_minutes_target: options.weeklyMinutesTarget,
+    };
     return await ApiClient.post<object>('/plans', payload);
   }
 
   static async listPlans(userId: number): Promise<PlanItem[]> {
     return await ApiClient.get<PlanItem[]>(`/plans?userId=${userId}`);
+  }
+
+  static async deletePlanByBook(userId: number, bookId: number): Promise<object> {
+    return await ApiClient.delete<object>(`/plans/by-book?userId=${userId}&bookId=${bookId}`);
   }
 
   static async updatePlanProgress(
@@ -393,7 +449,8 @@ export class ApiClient {
     chapterId: string,
     progress: number,
     scrollOffset: number = 0,
-    status: string = 'reading'
+    status: string = 'reading',
+    options: PlanTargetOptions = {}
   ): Promise<ReadingProgress> {
     const payload: UpdateProgressRequest = {
       user_id: userId,
@@ -402,8 +459,28 @@ export class ApiClient {
       progress,
       scroll_offset: scrollOffset,
       status,
+      daily_minutes_target: options.dailyMinutesTarget,
+      weekly_minutes_target: options.weeklyMinutesTarget,
     };
     return await ApiClient.patch<ReadingProgress>(`/plans/${planId}`, payload);
+  }
+
+  static async updatePlanTargets(
+    userId: number,
+    plan: PlanItem,
+    dailyMinutesTarget: number,
+    weeklyMinutesTarget: number
+  ): Promise<ReadingProgress> {
+    return await ApiClient.updatePlanProgress(
+      userId,
+      plan.id,
+      plan.bookId,
+      plan.chapterId || '',
+      plan.progress || 0,
+      plan.scrollOffset || 0,
+      plan.status || 'reading',
+      { dailyMinutesTarget, weeklyMinutesTarget }
+    );
   }
 
   static async saveNote(userId: number, bookId: number, content: string): Promise<object> {
@@ -421,6 +498,10 @@ export class ApiClient {
     return await ApiClient.post<Book[]>('/favorites', payload);
   }
 
+  static async removeFavorite(userId: number, bookId: number): Promise<Book[]> {
+    return await ApiClient.delete<Book[]>(`/favorites?userId=${userId}&bookId=${bookId}`);
+  }
+
   static async profile(userId: number): Promise<ProfileBundle> {
     return await ApiClient.get<ProfileBundle>(`/users/profile?userId=${userId}`);
   }
@@ -431,13 +512,28 @@ export class ApiClient {
       account: profile.account,
       phone: profile.phone,
       name: profile.name,
+      nickname: profile.nickname || profile.name,
       major: profile.major,
       grade: profile.grade,
       interests: profile.interests,
       goal: profile.goal,
+      intro: profile.intro || '',
+      avatarUrl: profile.avatarUrl || '',
       channels: profile.channels,
     };
     return await ApiClient.post<UserProfile>('/users/profile', payload);
+  }
+
+  static async uploadAvatar(userId: number, filePath: string): Promise<string> {
+    interface AvatarUploadResult {
+      avatarUrl: string;
+    }
+    const fileName = ApiClient.fileNameFromPath(filePath, `avatar-${userId}.jpg`);
+    const data = await ApiClient.multipart<AvatarUploadResult>('/users/avatar', [
+      { name: 'user_id', contentType: 'text/plain', data: `${userId}` },
+      { name: 'file', contentType: ApiClient.contentTypeForFile(fileName), remoteFileName: fileName, filePath },
+    ]);
+    return data.avatarUrl || '';
   }
 
   static async trackEvent(event: AnalyticsEvent): Promise<object> {
@@ -451,6 +547,10 @@ export class ApiClient {
 
   static async profileAnalysis(userId: number): Promise<object> {
     return await ApiClient.get<object>(`/analytics/profile?userId=${userId}`);
+  }
+
+  static async readingStats(userId: number): Promise<ReadingStats> {
+    return await ApiClient.get<ReadingStats>(`/analytics/reading-stats?userId=${userId}`);
   }
 
   static async rebuildProfileAnalysis(userId: number): Promise<object> {
@@ -535,6 +635,63 @@ export class ApiClient {
     return await ApiClient.request<T>(path, 'PATCH' as http.RequestMethod, body);
   }
 
+  private static async delete<T>(path: string): Promise<T> {
+    return await ApiClient.request<T>(path, 'DELETE' as http.RequestMethod);
+  }
+
+  private static fileNameFromPath(path: string, fallback: string): string {
+    if (!path) {
+      return fallback;
+    }
+    const parts = path.split(/[\\/]/);
+    const value = parts.length > 0 ? parts[parts.length - 1] : '';
+    return value || fallback;
+  }
+
+  private static contentTypeForFile(fileName: string): string {
+    const lower = (fileName || '').toLowerCase();
+    if (lower.endsWith('.png')) {
+      return 'image/png';
+    }
+    if (lower.endsWith('.webp')) {
+      return 'image/webp';
+    }
+    return 'image/jpeg';
+  }
+
+  private static async multipart<T>(path: string, parts: http.MultiFormData[]): Promise<T> {
+    let lastError: string = '';
+    for (let i = 0; i < API_BASE_URLS.length; i++) {
+      const client = http.createHttp();
+      try {
+        const response = await client.request(`${API_BASE_URLS[i]}${path}`, {
+          method: http.RequestMethod.POST,
+          multiFormDataList: parts,
+          expectDataType: http.HttpDataType.STRING,
+          connectTimeout: 8000,
+          readTimeout: 60000,
+        });
+        const text = response.result as string;
+        const envelope = JSON.parse(text) as ApiEnvelope<T>;
+        if (envelope.code !== 0) {
+          throw new Error(`${API_ERROR_PREFIX}${envelope.message}`);
+        }
+        ApiClient.markActiveBaseUrl(API_BASE_URLS[i]);
+        return envelope.data;
+      } catch (err) {
+        const message = `${err}`;
+        const prefixIndex = message.indexOf(API_ERROR_PREFIX);
+        if (prefixIndex >= 0) {
+          throw new Error(message.substring(prefixIndex + API_ERROR_PREFIX.length));
+        }
+        lastError = message;
+      } finally {
+        client.destroy();
+      }
+    }
+    throw new Error(`头像上传失败，请确认后端 8081 服务可用。${lastError}`);
+  }
+
   private static async request<T>(path: string, method: http.RequestMethod, body?: object): Promise<T> {
     let lastError: string = '';
     const isAiRequest: boolean = path.startsWith('/ai/');
@@ -560,6 +717,7 @@ export class ApiClient {
           }
           throw new Error(`${API_ERROR_PREFIX}${envelope.message}`);
         }
+        ApiClient.markActiveBaseUrl(API_BASE_URLS[i]);
         return envelope.data;
       } catch (err) {
         const message = `${err}`;

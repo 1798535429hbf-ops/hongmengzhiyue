@@ -1,5 +1,7 @@
 from typing import Any, Dict, List
 
+import requests
+
 from .rag import search_books
 
 
@@ -12,6 +14,55 @@ def search_books_tool(query: str) -> Dict[str, Any]:
     return {
         "books": books,
         "trace": tool_trace("search_books", "ok", {"query": query, "count": len(books)}),
+    }
+
+
+def external_book_search_tool(query: str, limit: int = 3) -> Dict[str, Any]:
+    safe_query = (query or "").strip()
+    if not safe_query:
+        return {
+            "sources": [],
+            "trace": tool_trace("external_book_search", "skipped", {"reason": "empty_query"}),
+        }
+    try:
+        response = requests.get(
+            "https://openlibrary.org/search.json",
+            params={"q": safe_query, "limit": limit},
+            timeout=8,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except requests.RequestException as exc:
+        return {
+            "sources": [],
+            "trace": tool_trace("external_book_search", "failed", {"query": safe_query, "error": str(exc)[:180]}),
+        }
+    docs = body.get("docs") or []
+    sources: List[Dict[str, Any]] = []
+    for index, item in enumerate(docs[:limit]):
+        title = str(item.get("title") or "")
+        author = ", ".join(item.get("author_name") or [])
+        year = item.get("first_publish_year") or ""
+        key = str(item.get("key") or "")
+        url = f"https://openlibrary.org{key}" if key else "https://openlibrary.org/search"
+        text = "；".join(part for part in [
+            f"书名：{title}" if title else "",
+            f"作者：{author}" if author else "",
+            f"首次出版：{year}" if year else "",
+        ] if part)
+        if text:
+            sources.append({
+                "chunk_id": None,
+                "book_id": None,
+                "title": title or "OpenLibrary result",
+                "source": url,
+                "text": text,
+                "chunk_text": text,
+                "chunk_index": index,
+            })
+    return {
+        "sources": sources,
+        "trace": tool_trace("external_book_search", "ok", {"query": safe_query, "count": len(sources)}),
     }
 
 

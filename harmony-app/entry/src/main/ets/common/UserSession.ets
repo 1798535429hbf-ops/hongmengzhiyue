@@ -40,7 +40,7 @@ function putSessionInAppStorage(profile: UserProfile | null): void {
     return;
   }
   AppStorage.setOrCreate(SESSION_USER_ID_KEY, profile.id);
-  AppStorage.setOrCreate(SESSION_USER_NAME_KEY, profile.name || `用户 ${profile.id}`);
+  AppStorage.setOrCreate(SESSION_USER_NAME_KEY, profile.nickname || profile.name || `用户 ${profile.id}`);
   AppStorage.setOrCreate(SESSION_PROFILE_JSON_KEY, JSON.stringify(profile));
 }
 
@@ -129,10 +129,13 @@ export class UserSession {
       account: profile.account || String(userId),
       phone: profile.phone || String(userId),
       name: profile.name || `智阅同学 ${userId}`,
+      nickname: profile.nickname || profile.name || `智阅同学 ${userId}`,
       major: profile.major || '待完善专业',
       grade: profile.grade || '大二',
       interests: profile.interests || '课程延伸阅读,专业入门,AI 伴读',
       goal: profile.goal || '找到合适的书并持续读下去',
+      intro: profile.intro || '',
+      avatarUrl: profile.avatarUrl || '',
       channels: profile.channels || 'library,jd,dangdang,second_hand',
     };
     const savedProfile: UserProfile = await ApiClient.saveProfile(draft);

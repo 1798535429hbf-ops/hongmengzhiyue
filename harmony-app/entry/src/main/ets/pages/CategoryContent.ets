@@ -6,6 +6,7 @@ import { Theme } from '../common/Theme';
 
 type AudienceKey = 'male' | 'female';
 type PanelMode = 'gender' | 'all' | 'tags';
+type FocusArea = 'male' | 'female' | 'tags';
 
 interface AudienceOption {
   key: AudienceKey;
@@ -56,8 +57,8 @@ const AUDIENCE_OPTIONS: AudienceOption[] = [
     key: 'female',
     label: '女生',
     keyword: '女生向',
-    accent: '#5677FF',
-    soft: '#EAF0FF',
+    accent: '#D84B45',
+    soft: '#FCEBE9',
   },
 ];
 
@@ -113,12 +114,21 @@ const SUBJECT_GROUPS: SubjectGroup[] = [
 ];
 
 const TAG_HIGHLIGHT_COLORS: string[] = ['#F7EFE7', '#EAF1FF', '#FFF1E4', '#EDF6ED', '#EEF4FF', '#F4EEF9'];
+const OTHER_SUBJECT_GROUP: SubjectGroup = {
+  key: 'other',
+  title: '其他',
+  summary: '暂未归入学科卡片的作品，先集中放在这里，避免好书被藏起来。',
+  tone: '#F3F4F8',
+  accent: '#7C8493',
+  aliases: [],
+};
 
 @Component
 export struct CategoryContent {
   @Prop pageWidth: number = 390;
   @State panelMode: PanelMode = 'gender';
   @State selectedAudience: AudienceKey = 'male';
+  @State focusArea: FocusArea = 'male';
   @State selectedCategoryKey: string = 'all';
   @State selectedTagFilter: string = '';
   @State audienceBooks: Book[] = [];
@@ -181,7 +191,12 @@ export struct CategoryContent {
   }
 
   categoryTabs(): SubjectGroup[] {
-    return SUBJECT_GROUPS;
+    const groups: SubjectGroup[] = [];
+    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
+      groups.push(SUBJECT_GROUPS[i]);
+    }
+    groups.push(OTHER_SUBJECT_GROUP);
+    return groups;
   }
 
   formatCount(count: number): string {
@@ -245,13 +260,36 @@ export struct CategoryContent {
     return haystack.indexOf(tag) >= 0;
   }
 
+  bookHaystack(book: Book): string {
+    return `${book.title} ${book.author} ${book.summary} ${book.tags} ${book.category || ''}`;
+  }
+
+  matchesKnownCategory(book: Book): boolean {
+    const haystack = this.bookHaystack(book);
+    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
+      const group = SUBJECT_GROUPS[i];
+      for (let index = 0; index < group.aliases.length; index++) {
+        if (haystack.indexOf(group.aliases[index]) >= 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   matchesCategory(book: Book, categoryKey: string): boolean {
+    if (categoryKey === 'all') {
+      return true;
+    }
+    if (categoryKey === 'other') {
+      return !this.matchesKnownCategory(book);
+    }
     for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
       const group = SUBJECT_GROUPS[i];
       if (group.key !== categoryKey) {
         continue;
       }
-      const haystack = `${book.title} ${book.author} ${book.summary} ${book.tags}`;
+      const haystack = this.bookHaystack(book);
       for (let index = 0; index < group.aliases.length; index++) {
         if (haystack.indexOf(group.aliases[index]) >= 0) {
           return true;
@@ -264,8 +302,9 @@ export struct CategoryContent {
 
   categoryCards(): CategoryCard[] {
     const cards: CategoryCard[] = [];
-    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
-      const group = SUBJECT_GROUPS[i];
+    const groups = this.categoryTabs();
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
       const books: Book[] = [];
       for (let index = 0; index < this.audienceBooks.length; index++) {
         const book = this.audienceBooks[index];
@@ -285,6 +324,25 @@ export struct CategoryContent {
       });
     }
     return cards;
+  }
+
+  categoryKeyForTag(tag: string): string {
+    if (!tag) {
+      return 'all';
+    }
+    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
+      const group = SUBJECT_GROUPS[i];
+      if (tag === group.title) {
+        return group.key;
+      }
+      for (let index = 0; index < group.aliases.length; index++) {
+        const alias = group.aliases[index];
+        if (tag === alias || tag.indexOf(alias) >= 0 || alias.indexOf(tag) >= 0) {
+          return group.key;
+        }
+      }
+    }
+    return 'all';
   }
 
   topCategoryCards(): CategoryCard[] {
@@ -355,14 +413,14 @@ export struct CategoryContent {
     this.busyText = '正在读取分类';
     this.errorText = '';
     try {
-      const books = await ApiClient.searchBooks(this.currentAudienceKeyword(), '', 0, 50);
+      let books = await ApiClient.searchBooks(this.currentAudienceKeyword(), '', 0, 50);
+      if (!books || books.length === 0) {
+        books = await ApiClient.searchBooks('', '', 0, 50);
+      }
       if (token !== this.loadToken) {
         return;
       }
       this.audienceBooks = Array.isArray(books) ? books : [];
-      if (this.panelMode === 'all' && this.selectedCategoryKey !== 'all' && !this.selectedTagFilter) {
-        this.selectedCategoryKey = 'all';
-      }
     } catch (err) {
       if (token !== this.loadToken) {
         return;
@@ -379,6 +437,7 @@ export struct CategoryContent {
   switchAudience(audience: AudienceKey): void {
     const audienceChanged = this.selectedAudience !== audience;
     this.selectedAudience = audience;
+    this.focusArea = audience;
     this.selectedCategoryKey = 'all';
     this.selectedTagFilter = '';
     this.panelMode = 'gender';
@@ -387,33 +446,50 @@ export struct CategoryContent {
     }
   }
 
+  switchTagAudience(audience: AudienceKey): void {
+    const audienceChanged = this.selectedAudience !== audience;
+    this.selectedAudience = audience;
+    this.focusArea = audience;
+    this.selectedCategoryKey = 'all';
+    this.selectedTagFilter = '';
+    this.panelMode = 'tags';
+    if (audienceChanged) {
+      this.reloadAudienceBooks();
+    }
+  }
+
   openAllWorks(categoryKey: string = 'all'): void {
+    this.focusArea = this.selectedAudience;
     this.selectedCategoryKey = categoryKey;
     this.selectedTagFilter = '';
     this.panelMode = 'all';
   }
 
   openCategory(categoryKey: string): void {
+    this.focusArea = this.selectedAudience;
     this.selectedCategoryKey = categoryKey;
     this.selectedTagFilter = '';
     this.panelMode = 'all';
   }
 
   openTagPanel(): void {
+    this.focusArea = 'tags';
     this.selectedTagFilter = '';
     this.selectedCategoryKey = 'all';
     this.panelMode = 'tags';
   }
 
   backToOverview(): void {
+    this.focusArea = this.selectedAudience;
     this.selectedTagFilter = '';
     this.selectedCategoryKey = 'all';
     this.panelMode = 'gender';
   }
 
   selectTag(tag: string): void {
+    this.focusArea = this.selectedAudience;
     this.selectedTagFilter = tag;
-    this.selectedCategoryKey = 'all';
+    this.selectedCategoryKey = this.categoryKeyForTag(tag);
     this.panelMode = 'all';
   }
 
@@ -504,9 +580,9 @@ export struct CategoryContent {
   @Builder
   SideBar() {
     Column({ space: 10 }) {
-      this.SideItem('男生', this.selectedAudience === 'male' && this.panelMode !== 'tags', AUDIENCE_OPTIONS[0].accent, AUDIENCE_OPTIONS[0].soft, () => this.switchAudience('male'))
-      this.SideItem('女生', this.selectedAudience === 'female' && this.panelMode !== 'tags', AUDIENCE_OPTIONS[1].accent, AUDIENCE_OPTIONS[1].soft, () => this.switchAudience('female'))
-      this.SideItem('标签', this.panelMode === 'tags', Theme.mobilePurple, '#F4EEF9', () => this.openTagPanel())
+      this.SideItem('男生', this.focusArea === 'male', AUDIENCE_OPTIONS[0].accent, AUDIENCE_OPTIONS[0].soft, () => this.switchAudience('male'))
+      this.SideItem('女生', this.focusArea === 'female', AUDIENCE_OPTIONS[1].accent, AUDIENCE_OPTIONS[1].soft, () => this.switchAudience('female'))
+      this.SideItem('标签', this.focusArea === 'tags', Theme.mobilePurple, '#F4EEF9', () => this.openTagPanel())
     }
     .width(this.sidebarWidth())
     .height('100%')
@@ -796,8 +872,8 @@ export struct CategoryContent {
   TagPanel() {
     Column({ space: 14 }) {
       Row({ space: 18 }) {
-        this.TagAudienceTab('男生标签', this.selectedAudience === 'male', AUDIENCE_OPTIONS[0].accent, () => this.switchAudience('male'))
-        this.TagAudienceTab('女生标签', this.selectedAudience === 'female', AUDIENCE_OPTIONS[1].accent, () => this.switchAudience('female'))
+        this.TagAudienceTab('男生标签', this.selectedAudience === 'male', AUDIENCE_OPTIONS[0].accent, () => this.switchTagAudience('male'))
+        this.TagAudienceTab('女生标签', this.selectedAudience === 'female', AUDIENCE_OPTIONS[1].accent, () => this.switchTagAudience('female'))
       }
       .width('100%')
       .alignItems(VerticalAlign.Bottom)

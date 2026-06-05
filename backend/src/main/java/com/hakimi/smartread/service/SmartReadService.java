@@ -62,12 +62,24 @@ public class SmartReadService {
         long bookId = Payloads.number(payload, "book_id", 0L);
         String question = Payloads.text(payload, "question");
         String chapterId = Payloads.text(payload, "chapter_id", "");
+        String paragraph = Payloads.text(payload, "paragraph", "");
         Map<String, Object> enriched = new LinkedHashMap<>(payload);
         enriched.put("user_profile", repository.findProfile(userId));
         enriched.put("profile_analysis", repository.findProfileAnalysis(userId));
+        enriched.putIfAbsent("tone", "warm_companion");
+        enriched.putIfAbsent("allow_external_search", true);
         if (bookId > 0) {
             enriched.put("book", repository.getBook(bookId));
-            enriched.put("sources", repository.findChunks(question, bookId, 6));
+            if (!chapterId.isBlank()) {
+                try {
+                    enriched.put("chapter", repository.getReadingContent(bookId, chapterId));
+                } catch (RuntimeException ignored) {
+                    enriched.put("chapter_id", chapterId);
+                }
+            }
+            String retrievalQuery = paragraph.isBlank() ? question : question + " " + paragraph;
+            enriched.put("paragraph", paragraph);
+            enriched.put("sources", repository.findChunks(retrievalQuery, bookId, 6));
         }
         Map<String, Object> result = aiGateway.chat(enriched);
         String answer = String.valueOf(result.getOrDefault("answer", ""));
@@ -321,8 +333,20 @@ public class SmartReadService {
             throw SmartReadException.badRequest("缺少 book_id");
         }
         int targetDays = Payloads.integer(payload, "target_days", 14);
-        long id = repository.createPlan(userId, bookId, targetDays);
+        int dailyMinutesTarget = Payloads.integer(payload, "daily_minutes_target", 30);
+        int weeklyMinutesTarget = Payloads.integer(payload, "weekly_minutes_target", Math.max(1, dailyMinutesTarget * 7));
+        long id = repository.createPlan(userId, bookId, targetDays, dailyMinutesTarget, weeklyMinutesTarget);
         return Map.of("id", id, "status", "active");
+    }
+
+    public Map<String, Object> deletePlan(long planId, long userId) {
+        int deleted = repository.deletePlan(userId, planId);
+        return Map.of("deleted", deleted);
+    }
+
+    public Map<String, Object> deletePlanByBook(long userId, long bookId) {
+        int deleted = repository.deletePlanByBook(userId, bookId);
+        return Map.of("deleted", deleted);
     }
 
     public Map<String, Object> updatePlan(long planId, Map<String, Object> payload) {
@@ -332,17 +356,27 @@ public class SmartReadService {
         String chapterId = Payloads.text(payload, "chapter_id", "");
         int scrollOffset = Payloads.integer(payload, "scroll_offset", 0);
         String status = Payloads.text(payload, "status", progress >= 100 ? "finished" : "reading");
-        int updated = repository.updatePlan(userId, planId, progress, status, chapterId, scrollOffset);
+        Integer dailyMinutesTarget = optionalInteger(payload, "daily_minutes_target");
+        Integer weeklyMinutesTarget = optionalInteger(payload, "weekly_minutes_target");
+        int updated = repository.updatePlan(userId, planId, progress, status, chapterId, scrollOffset,
+                dailyMinutesTarget, weeklyMinutesTarget);
         if (updated <= 0) {
             throw SmartReadException.notFound("未找到当前用户的阅读计划：" + planId);
         }
-        return Map.of(
-                "planId", planId,
-                "bookId", bookId,
-                "chapterId", chapterId,
-                "progress", progress,
-                "scrollOffset", scrollOffset,
-                "status", status);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("planId", planId);
+        result.put("bookId", bookId);
+        result.put("chapterId", chapterId);
+        result.put("progress", progress);
+        result.put("scrollOffset", scrollOffset);
+        result.put("status", status);
+        if (dailyMinutesTarget != null) {
+            result.put("dailyMinutesTarget", dailyMinutesTarget);
+        }
+        if (weeklyMinutesTarget != null) {
+            result.put("weeklyMinutesTarget", weeklyMinutesTarget);
+        }
+        return result;
     }
 
     public Map<String, Object> createNote(Map<String, Object> payload) {
@@ -421,6 +455,28 @@ public class SmartReadService {
             return 2;
         }
         return 1;
+    }
+
+    private Integer optionalInteger(Map<String, Object> payload, String key) {
+        Object value = payload.get(key);
+        if (value == null) {
+            value = payload.get(toCamel(key));
+        }
+        if (value == null || value.toString().isBlank()) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return Integer.parseInt(value.toString());
+    }
+
+    private String toCamel(String key) {
+        int index = key.indexOf('_');
+        if (index < 0 || index == key.length() - 1) {
+            return key;
+        }
+        return key.substring(0, index) + Character.toUpperCase(key.charAt(index + 1)) + key.substring(index + 2);
     }
 
     private String hashPassword(String phone, String password) {

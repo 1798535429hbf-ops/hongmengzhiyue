@@ -3,6 +3,7 @@ package com.hakimi.smartread.controller;
 import com.hakimi.smartread.api.ApiResponse;
 import com.hakimi.smartread.repository.SmartReadRepository;
 import com.hakimi.smartread.service.SmartReadService;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,5 +40,17 @@ public class PlanController {
     public ApiResponse<Map<String, Object>> update(@PathVariable long id,
                                                    @RequestBody Map<String, Object> payload) {
         return ApiResponse.ok(service.updatePlan(id, payload));
+    }
+
+    @DeleteMapping("/{id}")
+    public ApiResponse<Map<String, Object>> delete(@PathVariable long id,
+                                                   @RequestParam(defaultValue = "10086") long userId) {
+        return ApiResponse.ok(service.deletePlan(id, userId));
+    }
+
+    @DeleteMapping("/by-book")
+    public ApiResponse<Map<String, Object>> deleteByBook(@RequestParam(defaultValue = "10086") long userId,
+                                                         @RequestParam long bookId) {
+        return ApiResponse.ok(service.deletePlanByBook(userId, bookId));
     }
 }

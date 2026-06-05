@@ -1,5 +1,5 @@
 import { ApiClient } from '../common/ApiClient';
-import { Book, emptyBook, VolumeItem, CatalogVolume } from '../common/Models';
+import { Book, emptyBook, VolumeItem, CatalogVolume, PlanItem, ProfileBundle } from '../common/Models';
 import { BookCover } from '../common/BookCover';
 import { currentBookId, goBack, openCatalog, openReader } from '../common/Navigation';
 import { ShelfStore } from '../common/ShelfStore';
@@ -16,6 +16,10 @@ struct BookDetailPage {
   @State errorText: string = '';
   @State summaryExpanded: boolean = false;
   @State pageWidth: number = 390;
+  @State inPlan: boolean = false;
+  @State inFavorite: boolean = false;
+  @State toastText: string = '';
+  @State showToast: boolean = false;
 
   aboutToAppear(): void {
     this.bookId = currentBookId();
@@ -51,6 +55,7 @@ struct BookDetailPage {
       this.book = await ApiClient.getBook(this.bookId);
       const userId: number = UserSession.currentUserId();
       if (userId > 0) {
+        await this.loadUserBookState(userId);
         try {
           await ApiClient.trackEvent({ user_id: userId, event_type: 'VIEW_BOOK_DETAIL', book_id: this.book.id });
         } catch (_) {}
@@ -66,46 +71,115 @@ struct BookDetailPage {
     } catch (err) { this.errorText = `详情加载失败：${err}`; } finally { this.busyText = ''; }
   }
 
-  async addFavorite(): Promise<void> {
-    const userId: number = UserSession.currentUserId();
-    if (userId <= 0) {
-      this.errorText = '请先在“我的”页面登录后再加入书架。';
+  async loadUserBookState(userId: number = UserSession.currentUserId()): Promise<void> {
+    if (userId <= 0 || this.book.id <= 0) {
+      this.inPlan = false;
+      this.inFavorite = false;
       return;
     }
-    this.busyText = '正在加入书架'; this.errorText = '';
     try {
-      await ApiClient.favorite(userId, this.book.id);
-      try {
-        await ApiClient.trackEvent({ user_id: userId, event_type: 'FAVORITE_BOOK', book_id: this.book.id });
-      } catch (_) {}
-      const ctx = this.hostContext();
-      if (ctx) {
-        await ShelfStore.restoreHistoryBookToShelf(ctx, `history:remote:${this.book.id}`);
-      }
-      this.busyText = '已加入书架';
-    } catch (err) { this.errorText = `加入书架失败：${err}`; this.busyText = ''; }
+      const bundle: ProfileBundle = await ApiClient.profile(userId);
+      this.inPlan = this.hasPlan(bundle.plans || []);
+      this.inFavorite = this.hasFavorite(bundle.favorites || []);
+    } catch (_) {
+      this.inPlan = false;
+      this.inFavorite = false;
+    }
   }
 
-  async addToPlan(): Promise<void> {
+  hasPlan(plans: PlanItem[]): boolean {
+    for (let i = 0; i < plans.length; i++) {
+      if (plans[i].bookId === this.book.id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  hasFavorite(books: Book[]): boolean {
+    for (let i = 0; i < books.length; i++) {
+      if (books[i].id === this.book.id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  flashToast(text: string): void {
+    this.toastText = text;
+    this.showToast = true;
+    setTimeout(() => {
+      this.showToast = false;
+      this.toastText = '';
+    }, 1000);
+  }
+
+  async toggleFavorite(): Promise<void> {
     const userId: number = UserSession.currentUserId();
     if (userId <= 0) {
-      this.errorText = '请先在“我的”页面登录后再加入阅读计划。';
+      this.errorText = '请先登录后再同步书架。';
       return;
     }
     if (this.book.id <= 0) {
-      this.errorText = '图书详情还没有加载完成，请稍后再试。';
+      this.errorText = '图书详情还没有加载完成。';
       return;
     }
-    this.busyText = '正在加入阅读计划';
+    this.busyText = this.inFavorite ? '正在移除书架' : '正在加入书架';
     this.errorText = '';
     try {
-      await ApiClient.createPlan(userId, this.book.id, 14);
-      try {
-        await ApiClient.trackEvent({ user_id: userId, event_type: 'CREATE_READING_PLAN', book_id: this.book.id });
-      } catch (_) {}
-      this.busyText = '已加入个人阅读计划';
+      if (this.inFavorite) {
+        await ApiClient.removeFavorite(userId, this.book.id);
+        this.inFavorite = false;
+        this.flashToast('已移除书架');
+      } else {
+        await ApiClient.favorite(userId, this.book.id);
+        try {
+          await ApiClient.trackEvent({ user_id: userId, event_type: 'FAVORITE_BOOK', book_id: this.book.id });
+        } catch (_) {}
+        const ctx = this.hostContext();
+        if (ctx) {
+          await ShelfStore.restoreHistoryBookToShelf(ctx, `history:remote:${this.book.id}`);
+        }
+        this.inFavorite = true;
+        this.flashToast('已加入书架');
+      }
+      await this.loadUserBookState(userId);
     } catch (err) {
-      this.errorText = `加入计划失败：${err}`;
+      this.errorText = `书架同步失败：${err}`;
+    } finally {
+      this.busyText = '';
+    }
+  }
+
+  async togglePlan(): Promise<void> {
+    const userId: number = UserSession.currentUserId();
+    if (userId <= 0) {
+      this.errorText = '请先登录后再同步阅读计划。';
+      return;
+    }
+    if (this.book.id <= 0) {
+      this.errorText = '图书详情还没有加载完成。';
+      return;
+    }
+    this.busyText = this.inPlan ? '正在移除阅读计划' : '正在加入阅读计划';
+    this.errorText = '';
+    try {
+      if (this.inPlan) {
+        await ApiClient.deletePlanByBook(userId, this.book.id);
+        this.inPlan = false;
+        this.flashToast('已移除计划');
+      } else {
+        await ApiClient.createPlan(userId, this.book.id, 14);
+        try {
+          await ApiClient.trackEvent({ user_id: userId, event_type: 'CREATE_READING_PLAN', book_id: this.book.id });
+        } catch (_) {}
+        this.inPlan = true;
+        this.flashToast('已添加到计划');
+      }
+      await this.loadUserBookState(userId);
+    } catch (err) {
+      this.errorText = `计划同步失败：${err}`;
+    } finally {
       this.busyText = '';
     }
   }
@@ -203,7 +277,10 @@ struct BookDetailPage {
       .backgroundColor('#F5F5F0')
 
       this.StickyHeader()
-      this.BottomActionBar()
+      this.BottomActionBarV2()
+      if (this.showToast) {
+        this.ToastOverlay()
+      }
     }
     .width('100%')
     .height('100%')
@@ -435,27 +512,61 @@ struct BookDetailPage {
   }
 
   @Builder
-  BottomActionBar() {
+  BottomActionBarV2() {
     Row({ space: this.isWide() ? 20 : 12 }) {
       Column({ space: 4 }) {
-        Image($r('app.media.icon_chevron_right')).width(this.isWide() ? 24 : 20).height(this.isWide() ? 24 : 20)
-          .fillColor('#666666').rotate({ angle: 90 })
-        Text('加入书架').fontColor('#666666').fontSize(this.isWide() ? 13 : 11)
+        Image($r('app.media.icon_chevron_right'))
+          .width(this.isWide() ? 24 : 20)
+          .height(this.isWide() ? 24 : 20)
+          .fillColor(this.inFavorite ? Theme.mobileRed : '#666666')
+          .rotate({ angle: 90 })
+        Text(this.inFavorite ? '移除书架' : '加入书架')
+          .fontColor(this.inFavorite ? Theme.mobileRed : '#666666')
+          .fontSize(this.isWide() ? 13 : 11)
       }
-      .alignItems(HorizontalAlign.Center).onClick(() => this.addFavorite())
+      .alignItems(HorizontalAlign.Center)
+      .onClick(() => this.toggleFavorite())
 
-      Button('加入计划').height(this.isCompact() ? 36 : 40).fontColor('#8B4513').fontSize(this.isWide() ? 17 : 15)
-        .backgroundColor('#FFF0E6').borderRadius(20)
+      Button(this.inPlan ? '移除计划' : '加入计划')
+        .height(this.isCompact() ? 36 : 40)
+        .fontColor(this.inPlan ? Theme.mobileRed : '#8B4513')
+        .fontSize(this.isWide() ? 17 : 15)
+        .backgroundColor(this.inPlan ? '#FFF0F0' : '#FFF0E6')
+        .borderRadius(20)
         .padding({ left: this.isWide() ? 32 : 24, right: this.isWide() ? 32 : 24 })
-        .onClick(() => this.addToPlan())
+        .onClick(() => this.togglePlan())
 
-      Button('立即阅读').layoutWeight(1).height(this.isCompact() ? 38 : 44)
-        .fontColor(Theme.mobileSurface).fontSize(this.isWide() ? 18 : 16).fontWeight(FontWeight.Medium)
-        .backgroundColor(this.isReadable() ? Theme.mobileRed : '#CCCCCC').borderRadius(22)
+      Button('立即阅读')
+        .layoutWeight(1)
+        .height(this.isCompact() ? 38 : 44)
+        .fontColor(Theme.mobileSurface)
+        .fontSize(this.isWide() ? 18 : 16)
+        .fontWeight(FontWeight.Medium)
+        .backgroundColor(this.isReadable() ? Theme.mobileRed : '#CCCCCC')
+        .borderRadius(22)
         .onClick(() => this.openReaderSafely())
     }
-    .width('100%').height(this.isCompact() ? 60 : 72)
+    .width('100%')
+    .height(this.isCompact() ? 60 : 72)
     .padding({ left: this.isWide() ? 24 : 16, right: this.isWide() ? 24 : 16, top: 10, bottom: this.isCompact() ? 8 : 12 })
-    .backgroundColor(Theme.mobileSurface).border({ width: 1, color: '#F0F0F0' })
+    .backgroundColor(Theme.mobileSurface)
+    .border({ width: 1, color: '#F0F0F0' })
   }
+
+  @Builder
+  ToastOverlay() {
+    Stack({ alignContent: Alignment.Center }) {
+      Text(this.toastText)
+        .fontColor('#FFFFFF')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .padding({ left: 18, right: 18, top: 10, bottom: 10 })
+        .backgroundColor('rgba(20,20,20,0.82)')
+        .borderRadius(18)
+    }
+    .width('100%')
+    .height('100%')
+    .hitTestBehavior(HitTestMode.None)
+  }
+
 }

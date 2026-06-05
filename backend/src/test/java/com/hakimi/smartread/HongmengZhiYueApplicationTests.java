@@ -42,9 +42,36 @@ class HongmengZhiYueApplicationTests {
 	}
 
 	@Test
+	void readingPlanSchemaSupportsPerBookTimeTargets() throws Exception {
+		String schema = Files.readString(Path.of("src/main/resources/schema.sql"), StandardCharsets.UTF_8);
+		String repository = Files.readString(Path.of("src/main/java/com/hakimi/smartread/repository/SmartReadRepository.java"), StandardCharsets.UTF_8);
+		String service = Files.readString(Path.of("src/main/java/com/hakimi/smartread/service/SmartReadService.java"), StandardCharsets.UTF_8);
+
+		Assertions.assertTrue(schema.contains("daily_minutes_target INT NOT NULL DEFAULT 30"));
+		Assertions.assertTrue(schema.contains("weekly_minutes_target INT NOT NULL DEFAULT 210"));
+		Assertions.assertTrue(repository.contains("daily_minutes_target AS dailyMinutesTarget"));
+		Assertions.assertTrue(repository.contains("weekly_minutes_target AS weeklyMinutesTarget"));
+		Assertions.assertTrue(repository.contains("daily_minutes_target = COALESCE"));
+		Assertions.assertTrue(service.contains("Payloads.integer(payload, \"daily_minutes_target\", 30)"));
+		Assertions.assertTrue(service.contains("optionalInteger(payload, \"weekly_minutes_target\")"));
+	}
+
+	@Test
 	void chatEnrichesPayloadWithBookSources() throws Exception {
 		String service = Files.readString(Path.of("src/main/java/com/hakimi/smartread/service/SmartReadService.java"), StandardCharsets.UTF_8);
 		Assertions.assertTrue(service.contains("enriched.put(\"sources\", repository.findChunks"));
+	}
+
+	@Test
+	void chatForwardsReaderContextAndWarmCompanionOptions() throws Exception {
+		String service = Files.readString(Path.of("src/main/java/com/hakimi/smartread/service/SmartReadService.java"), StandardCharsets.UTF_8);
+
+		Assertions.assertTrue(service.contains("Payloads.text(payload, \"chapter_id\""));
+		Assertions.assertTrue(service.contains("Payloads.text(payload, \"paragraph\""));
+		Assertions.assertTrue(service.contains("enriched.putIfAbsent(\"tone\", \"warm_companion\")"));
+		Assertions.assertTrue(service.contains("enriched.putIfAbsent(\"allow_external_search\", true)"));
+		Assertions.assertTrue(service.contains("enriched.put(\"chapter\", repository.getReadingContent"));
+		Assertions.assertTrue(service.contains("String retrievalQuery = paragraph.isBlank() ? question : question + \" \" + paragraph"));
 	}
 
 	@Test

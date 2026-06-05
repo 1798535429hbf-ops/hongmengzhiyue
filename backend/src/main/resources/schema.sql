@@ -4,10 +4,13 @@ CREATE TABLE IF NOT EXISTS `user` (
   phone VARCHAR(32) NOT NULL COMMENT '手机号',
   password_hash VARCHAR(128) NOT NULL DEFAULT '' COMMENT '密码哈希',
   name VARCHAR(64) NOT NULL,
+  nickname VARCHAR(64) NOT NULL DEFAULT '',
   major VARCHAR(80) NOT NULL,
   grade VARCHAR(32) NOT NULL,
   interests TEXT NOT NULL,
   goal VARCHAR(160) NOT NULL,
+  intro VARCHAR(255) NOT NULL DEFAULT '',
+  avatar_url VARCHAR(500) NOT NULL DEFAULT '',
   channels VARCHAR(160) DEFAULT 'library,jd,dangdang,second_hand',
   status VARCHAR(32) NOT NULL DEFAULT 'active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -128,12 +131,15 @@ CREATE TABLE IF NOT EXISTS reading_plan (
   user_id BIGINT NOT NULL,
   book_id BIGINT NOT NULL,
   target_days INT NOT NULL,
+  daily_minutes_target INT NOT NULL DEFAULT 30,
+  weekly_minutes_target INT NOT NULL DEFAULT 210,
   progress INT NOT NULL DEFAULT 0,
   status VARCHAR(32) NOT NULL DEFAULT 'active',
   chapter_id VARCHAR(64) DEFAULT '',
   scroll_offset INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_reading_plan_user_book (user_id, book_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS note (

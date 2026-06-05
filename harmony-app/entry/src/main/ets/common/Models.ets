@@ -128,8 +128,14 @@ export interface PlanItem {
   title: string;
   author: string;
   targetDays: number;
+  dailyMinutesTarget?: number;
+  weeklyMinutesTarget?: number;
   progress: number;
   status: string;
+  chapterId?: string;
+  scrollOffset?: number;
+  createdAt?: string;
+  updatedAt?: string;
   coverColor: string;
 }
 
@@ -147,11 +153,24 @@ export interface UserProfile {
   account: string;
   phone: string;
   name: string;
+  nickname?: string;
   major: string;
   grade: string;
   interests: string;
   goal: string;
+  intro?: string;
+  avatarUrl?: string;
   channels: string;
+}
+
+export interface ReadingDayStat {
+  day: string;
+  seconds: number;
+}
+
+export interface ReadingStats {
+  todaySeconds: number;
+  dailySeconds: ReadingDayStat[];
 }
 
 export interface AnalyticsEventExtra {
@@ -223,10 +242,13 @@ export function emptyProfile(): UserProfile {
     account: '13800010086',
     phone: '13800010086',
     name: '测试同学',
+    nickname: '测试同学',
     major: '计算机科学',
     grade: '大二',
     interests: '人工智能,算法,英语备考',
     goal: '课程拓展与竞赛入门',
+    intro: '',
+    avatarUrl: '',
     channels: 'library,jd,dangdang,second_hand',
   };
 }

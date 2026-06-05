@@ -5,7 +5,7 @@ from .deepseek_client import DeepSeekClient
 from .intent_router import route_intent
 from .output_parser import normalize_chat, normalize_recommend
 from .rag import retrieve_chunks
-from .tools import commerce_search_tool, search_books_tool, tool_trace
+from .tools import commerce_search_tool, external_book_search_tool, search_books_tool, tool_trace
 
 client = DeepSeekClient()
 
@@ -66,9 +66,19 @@ def recommend_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def chat_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
     question = str(payload.get("question") or "")
+    paragraph = str(payload.get("paragraph") or "")
     book_id = _optional_int(payload.get("book_id"))
-    chunks = retrieve_chunks(question, book_id=book_id, limit=6)
+    retrieval_query = f"{question} {paragraph}".strip()
+    chunks = payload.get("sources") or retrieve_chunks(retrieval_query or question, book_id=book_id, limit=6)
     trace = [tool_trace("rag_retrieve", "ok", {"book_id": book_id, "top_k": len(chunks)})]
+    if not chunks:
+        allow_external = bool(payload.get("allow_external_search", False))
+        if allow_external:
+            external = external_book_search_tool(retrieval_query or question, limit=3)
+            trace.append(external["trace"])
+            chunks = external["sources"]
+        if chunks:
+            trace.append(tool_trace("external_context", "used", {"reason": "insufficient_rag"}))
     if not chunks:
         return {
             "answer": "这本书目前没有足够的来源片段，我不能用常识替它补内容。",
@@ -79,14 +89,20 @@ def chat_skill(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     messages = [
         {"role": "system", "content": (
-            "你是围绕图书知识库回答的 AI 伴读助手。回答必须贴合来源片段，"
-            "不能编造章节原文或书中没有的结论。输出 JSON 字段 answer, sources, follow_up_suggestion, llm_status。"
+            "你是陪大学生读书的 AI 伴读，语气要像耐心、灵动的同伴，温和但不油腻。"
+            "回答必须贴合 retrieved_chunks、book、chapter 和 paragraph；不能编造章节原文、人物关系、库存或书中没有的结论。"
+            "如果来源来自外部检索，只能作为资料不足时的补充，并要提醒用户回到书内来源核对。"
+            "不要用公式化的“首先、其次、最后”堆叠；可以有一点情绪和鼓励，但每个判断都要能追溯到来源。"
+            "输出 JSON 字段 answer, sources, follow_up_suggestion, llm_status。"
             "只返回 JSON object，例如 {\"answer\":\"\",\"sources\":[],\"follow_up_suggestion\":\"\",\"llm_status\":\"ok\"}。"
         )},
         {"role": "user", "content": json.dumps({
             "question": question,
+            "paragraph": paragraph,
             "retrieved_chunks": chunks,
             "book": payload.get("book"),
+            "chapter": payload.get("chapter"),
+            "tone": payload.get("tone") or "warm_companion",
             "user_profile": payload.get("user_profile") or {},
         }, ensure_ascii=False)},
     ]
