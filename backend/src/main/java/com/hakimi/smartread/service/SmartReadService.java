@@ -7,10 +7,13 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 @Service
 public class SmartReadService {
@@ -23,41 +26,95 @@ public class SmartReadService {
     }
 
     public Map<String, Object> recommend(Map<String, Object> payload) {
+        RecommendContext context = buildRecommendContext(payload);
+        Map<String, Object> result;
+        try {
+            result = aiGateway.recommend(context.enriched());
+        } catch (SmartReadException ex) {
+            if (!ex.status().is5xxServerError()) {
+                throw ex;
+            }
+            result = topRatedFallbackResult(context.query(), repository.topRatedBooks(context.page(), 8), List.of(),
+                    "ai_gateway_failed");
+        }
+        if (!isContextOnlyResult(result) && isWeakRecommendResult(result)) {
+            Object trace = result.getOrDefault("tool_trace", List.of());
+            result = topRatedFallbackResult(context.query(), repository.topRatedBooks(context.page(), 8), trace,
+                    "weak_ai_result");
+        }
+        repository.saveRecommendation(context.userId(), context.query(), result);
+        return result;
+    }
+
+    public void recommendStream(Map<String, Object> payload, java.io.OutputStream output) {
+        RecommendContext context = buildRecommendContext(payload);
+        Consumer<Map<String, Object>> saveFinal = result ->
+                repository.saveRecommendation(context.userId(), context.query(), result);
+        aiGateway.recommendStream(context.enriched(), output, saveFinal);
+    }
+
+    private RecommendContext buildRecommendContext(Map<String, Object> payload) {
         long userId = Payloads.number(payload, "user_id", 10086L);
         String query = Payloads.text(payload, "query", "");
+        int offset = Payloads.integer(payload, "offset", 0);
+        int page = Math.max(0, offset / 8);
         Map<String, Object> profile = repository.findProfile(userId);
+        List<Map<String, Object>> plans = repository.listPlans(userId);
+        List<Map<String, Object>> favorites = repository.listFavorites(userId);
+        List<Map<String, Object>> chatRecords = repository.listChatRecords(userId);
+        boolean hasHabitSignals = hasHabitSignals(plans, favorites, chatRecords);
         String keyword = normalizeKeyword(query);
-        if (keyword.isBlank()) {
+        if (keyword.isBlank() && hasHabitSignals) {
             keyword = normalizeKeyword(String.valueOf(profile.getOrDefault("interests", "")) + ","
                     + profile.getOrDefault("goal", ""));
         }
-        List<Map<String, Object>> candidateBooks = repository.searchBooks(keyword, "", 0, 8);
+        boolean topRatedFallback = query.isBlank() && !hasHabitSignals;
+        List<Map<String, Object>> candidateBooks = topRatedFallback
+                ? repository.topRatedBooks(page, 8)
+                : repository.searchBooks(keyword, "", page, 8);
         if (candidateBooks.isEmpty() && !query.isBlank()) {
-            candidateBooks = repository.searchBooks(query, "", 0, 8);
+            candidateBooks = repository.searchBooks(query, "", page, 8);
         }
         if (candidateBooks.isEmpty()) {
-            candidateBooks = repository.storeBooks("featured", userId, 0, 8);
+            candidateBooks = repository.topRatedBooks(page, 8);
+            topRatedFallback = true;
+        }
+        if (candidateBooks.isEmpty()) {
+            candidateBooks = repository.storeBooks("featured", userId, page, 8);
         }
         if (candidateBooks.isEmpty() && Payloads.bool(payload, "auto_import_missing_books", false)) {
             candidateBooks = repository.importMetadataBooks(defaultExternalBooks(keyword.isBlank() ? query : keyword),
                     "推荐链路发现数据库暂无候选书，已先写入真实书籍元数据；正文和章节需后续通过导入或版权渠道补齐。");
         }
         Map<String, Object> enriched = new LinkedHashMap<>(payload);
-        List<Map<String, Object>> plans = repository.listPlans(userId);
         enriched.put("user_profile", profile);
         enriched.put("profile_analysis", repository.findProfileAnalysis(userId));
         enriched.put("candidate_books", candidateBooks);
+        if (topRatedFallback) {
+            enriched.put("fallback_strategy", "top_rated_fallback");
+            enriched.put("fallback_reason", "用户习惯线索不足，优先使用数据库高评分和高热度图书");
+        }
         enriched.put("reading_history", plans);
         enriched.put("plans", plans);
-        enriched.put("favorites", repository.listFavorites(userId));
-        enriched.put("chat_records", repository.listChatRecords(userId));
+        enriched.put("favorites", favorites);
+        enriched.put("chat_records", chatRecords);
         enriched.put("retrieved_chunks", repository.findChunks(keyword, null, 8));
-        Map<String, Object> result = aiGateway.recommend(enriched);
-        repository.saveRecommendation(userId, query, result);
-        return result;
+        return new RecommendContext(userId, query, page, enriched);
     }
 
     public Map<String, Object> chat(Map<String, Object> payload) {
+        ChatContext context = buildChatContext(payload);
+        Map<String, Object> result = aiGateway.chat(context.enriched());
+        persistChatResult(context, result);
+        return result;
+    }
+
+    public void chatStream(Map<String, Object> payload, java.io.OutputStream output) {
+        ChatContext context = buildChatContext(payload);
+        aiGateway.chatStream(context.enriched(), output, result -> persistChatResult(context, result));
+    }
+
+    private ChatContext buildChatContext(Map<String, Object> payload) {
         long userId = Payloads.number(payload, "user_id", 10086L);
         long bookId = Payloads.number(payload, "book_id", 0L);
         String question = Payloads.text(payload, "question");
@@ -68,6 +125,9 @@ public class SmartReadService {
         enriched.put("profile_analysis", repository.findProfileAnalysis(userId));
         enriched.putIfAbsent("tone", "warm_companion");
         enriched.putIfAbsent("allow_external_search", true);
+        enriched.putIfAbsent("reasoning_policy", "grounded_sources_plus_deepseek_reasoning");
+        enriched.putIfAbsent("answer_scope",
+                "Use retrieved book evidence for book facts, and use DeepSeek general reasoning for explanation, analogies, reading advice, and concept connections. If evidence is insufficient, label the answer as general guidance instead of inventing book content.");
         if (bookId > 0) {
             enriched.put("book", repository.getBook(bookId));
             if (!chapterId.isBlank()) {
@@ -81,13 +141,15 @@ public class SmartReadService {
             enriched.put("paragraph", paragraph);
             enriched.put("sources", repository.findChunks(retrievalQuery, bookId, 6));
         }
-        Map<String, Object> result = aiGateway.chat(enriched);
+        return new ChatContext(userId, bookId, question, chapterId, enriched);
+    }
+
+    private void persistChatResult(ChatContext context, Map<String, Object> result) {
         String answer = String.valueOf(result.getOrDefault("answer", ""));
         Object sources = result.getOrDefault("sources", List.of());
-        long chatRecordId = repository.saveChat(userId, bookId, question, answer, sources);
-        repository.saveQuestionAnalysis(chatRecordId, userId, bookId, chapterId, question, answer,
-                classifyQuestion(question), depthLevel(question), sources);
-        return result;
+        long chatRecordId = repository.saveChat(context.userId(), context.bookId(), context.question(), answer, sources);
+        repository.saveQuestionAnalysis(chatRecordId, context.userId(), context.bookId(), context.chapterId(),
+                context.question(), answer, classifyQuestion(context.question()), depthLevel(context.question()), sources);
     }
 
     @SuppressWarnings("unchecked")
@@ -139,6 +201,90 @@ public class SmartReadService {
             }
         }
         return query.length() > 12 ? "" : query;
+    }
+
+    private boolean hasHabitSignals(List<Map<String, Object>> plans, List<Map<String, Object>> favorites,
+                                    List<Map<String, Object>> chatRecords) {
+        return !plans.isEmpty() || !favorites.isEmpty() || !chatRecords.isEmpty();
+    }
+
+    private boolean isContextOnlyResult(Map<String, Object> result) {
+        String intent = String.valueOf(result.getOrDefault("intent", "")).toLowerCase();
+        String status = String.valueOf(result.getOrDefault("llm_status", "")).toLowerCase();
+        return intent.equals("smalltalk") || intent.equals("clarify") || intent.equals("interest_analysis")
+                || intent.equals("chat") || status.equals("context_analysis") || status.equals("general_guidance");
+    }
+
+    private boolean isWeakRecommendResult(Map<String, Object> result) {
+        Object rawBooks = result.get("book_list");
+        boolean emptyBooks = !(rawBooks instanceof List<?> books) || books.isEmpty();
+        String status = String.valueOf(result.getOrDefault("llm_status", "")).toLowerCase();
+        return emptyBooks || status.contains("insufficient") || status.contains("parse") || status.contains("parser")
+                || status.contains("invalid") || status.contains("blocked") || status.contains("guardrail");
+    }
+
+    private Map<String, Object> topRatedFallbackResult(String query, List<Map<String, Object>> books,
+                                                       Object previousTrace, String detail) {
+        List<Map<String, Object>> bookList = new ArrayList<>();
+        for (Map<String, Object> book : books) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", book.get("id"));
+            item.put("title", book.getOrDefault("title", ""));
+            item.put("author", book.getOrDefault("author", ""));
+            item.put("difficulty", book.getOrDefault("difficulty", ""));
+            item.put("reason", topRatedReason(book));
+            item.put("coverColor", book.getOrDefault("coverColor", "#F5F0E8"));
+            bookList.add(item);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("intent", "recommend");
+        result.put("book_list", bookList);
+        result.put("reason", topRatedLead(query, books));
+        result.put("difficulty", books.isEmpty() ? "资料不足" : String.valueOf(books.get(0).getOrDefault("difficulty", "")));
+        result.put("follow_up_suggestion", books.isEmpty() ? "" : "先点开第一本看目录和简介；如果难度不对，再换下一本。");
+        result.put("sources", List.of());
+        result.put("tool_trace", topRatedTrace(previousTrace, detail, bookList.size()));
+        result.put("llm_status", "top_rated_fallback");
+        return result;
+    }
+
+    private String topRatedLead(String query, List<Map<String, Object>> books) {
+        if (books.isEmpty()) {
+            return "当前个性化线索不足，书库里也暂时没有可用的高评分候选，我先不硬凑书单。";
+        }
+        String title = String.valueOf(books.get(0).getOrDefault("title", ""));
+        String rating = String.valueOf(books.get(0).getOrDefault("rating", "0"));
+        String prefix = query == null || query.isBlank()
+                ? "当前个性化线索不足"
+                : "这次没有拿到足够稳定的个性化判断";
+        return prefix + "，先按书库评分和阅读热度推荐。《" + title + "》排在最前面，评分 " + rating
+                + "，适合作为这轮挑书的起点。你可以先点开目录和简介，如果它的节奏太快，再把范围收窄到更具体的主题。";
+    }
+
+    private String topRatedReason(Map<String, Object> book) {
+        String summary = String.valueOf(book.getOrDefault("summary", "")).trim();
+        String rating = String.valueOf(book.getOrDefault("rating", "0"));
+        String ratingCount = String.valueOf(book.getOrDefault("ratingCount", "0"));
+        String base = "书库评分 " + rating + "，" + ratingCount + " 人评分。";
+        if (summary.isBlank()) {
+            return base + "可以先看目录判断难度和节奏，适合当作这一轮挑书的起点。";
+        }
+        return base + (summary.length() > 56 ? summary.substring(0, 56) + "..." : summary)
+                + "。如果你想继续收窄范围，可以再把专业、考试目标或阅读时间加进去。";
+    }
+
+    private List<Object> topRatedTrace(Object previousTrace, String detail, int count) {
+        List<Object> trace = new ArrayList<>();
+        if (previousTrace instanceof List<?> list) {
+            trace.addAll(list);
+        }
+        trace.add(Map.of(
+                "tool", "top_rated_fallback",
+                "tool_name", "top_rated_fallback",
+                "status", "ok",
+                "detail", detail,
+                "count", count));
+        return trace;
     }
 
     private List<Map<String, Object>> defaultExternalBooks(String query) {
@@ -220,6 +366,7 @@ public class SmartReadService {
             user = repository.findUserByAccount(account);
         }
         if (user != null) {
+            ensureActiveUser(user);
             String phone = String.valueOf(user.getOrDefault("phone", account));
             String expectedHash = String.valueOf(user.getOrDefault("passwordHash", ""));
             if (!expectedHash.equals(hashPassword(phone, password))) {
@@ -233,6 +380,8 @@ public class SmartReadService {
         if (auth == null) {
             throw SmartReadException.badRequest("手机号未注册，请先注册。");
         }
+        Map<String, Object> authUser = repository.findUserById(((Number) auth.get("userId")).longValue());
+        ensureActiveUser(authUser);
         String expectedHash = String.valueOf(auth.getOrDefault("passwordHash", ""));
         if (!expectedHash.equals(hashPassword(phone, password))) {
             throw SmartReadException.badRequest("手机号或密码不正确。");
@@ -301,6 +450,76 @@ public class SmartReadService {
         return repository.findProfile(userId);
     }
 
+    public Map<String, Object> bindEmail(Map<String, Object> payload) {
+        long userId = Payloads.number(payload, "user_id", 0L);
+        if (userId <= 0) {
+            throw SmartReadException.badRequest("请先登录后再绑定邮箱");
+        }
+        String email = Payloads.text(payload, "email", "").trim().toLowerCase();
+        if (!email.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
+            throw SmartReadException.badRequest("请输入有效邮箱");
+        }
+        Map<String, Object> user = repository.findUserById(userId);
+        ensureActiveUser(user);
+        repository.updateUserEmail(userId, email);
+        return repository.findProfile(userId);
+    }
+
+    public Map<String, Object> changePassword(Map<String, Object> payload) {
+        long userId = Payloads.number(payload, "user_id", 0L);
+        if (userId <= 0) {
+            throw SmartReadException.badRequest("请先登录后再修改密码");
+        }
+        String oldPassword = Payloads.text(payload, "old_password", Payloads.text(payload, "oldPassword", ""));
+        String newPassword = Payloads.text(payload, "new_password", Payloads.text(payload, "newPassword", ""));
+        validatePassword(oldPassword);
+        validatePassword(newPassword);
+        Map<String, Object> user = repository.findUserById(userId);
+        ensureActiveUser(user);
+        String phone = String.valueOf(user.getOrDefault("phone", ""));
+        String expectedHash = String.valueOf(user.getOrDefault("passwordHash", ""));
+        if (!expectedHash.equals(hashPassword(phone, oldPassword))) {
+            throw SmartReadException.badRequest("当前密码不正确");
+        }
+        String nextHash = hashPassword(phone, newPassword);
+        repository.updateUserPassword(userId, nextHash);
+        repository.upsertAuthIdentity("phone", phone, userId, nextHash);
+        return Map.of("status", "ok", "message", "密码已修改");
+    }
+
+    public Map<String, Object> resetPassword(Map<String, Object> payload) {
+        String phone = normalizePhone(Payloads.text(payload, "phone", ""));
+        Map<String, Object> user = repository.findUserByPhone(phone);
+        if (user == null) {
+            throw SmartReadException.notFound("手机号未注册，无法重置密码");
+        }
+        ensureActiveUser(user);
+        long userId = ((Number) user.get("id")).longValue();
+        String generatedPassword = generateSystemPassword();
+        String nextHash = hashPassword(phone, generatedPassword);
+        repository.updateUserPassword(userId, nextHash);
+        repository.upsertAuthIdentity("phone", phone, userId, nextHash);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("phone", phone);
+        result.put("generatedPassword", generatedPassword);
+        result.put("message", "密码已重置为系统生成密码");
+        return result;
+    }
+
+    public Map<String, Object> deleteAccount(Map<String, Object> payload) {
+        long userId = Payloads.number(payload, "user_id", 0L);
+        if (userId <= 0) {
+            throw SmartReadException.badRequest("缺少 user_id");
+        }
+        Map<String, Object> user = repository.findUserById(userId);
+        ensureActiveUser(user);
+        int updated = repository.markUserDeleted(userId);
+        if (updated <= 0) {
+            throw SmartReadException.notFound("未找到需要注销的账号");
+        }
+        return Map.of("status", "deleted", "message", "账号已注销");
+    }
+
     public Map<String, Object> trackEvent(Map<String, Object> payload) {
         repository.saveBehaviorEvent(payload);
         return Map.of("status", "ok");
@@ -356,10 +575,11 @@ public class SmartReadService {
         String chapterId = Payloads.text(payload, "chapter_id", "");
         int scrollOffset = Payloads.integer(payload, "scroll_offset", 0);
         String status = Payloads.text(payload, "status", progress >= 100 ? "finished" : "reading");
+        Integer targetDays = optionalInteger(payload, "target_days");
         Integer dailyMinutesTarget = optionalInteger(payload, "daily_minutes_target");
         Integer weeklyMinutesTarget = optionalInteger(payload, "weekly_minutes_target");
         int updated = repository.updatePlan(userId, planId, progress, status, chapterId, scrollOffset,
-                dailyMinutesTarget, weeklyMinutesTarget);
+                targetDays, dailyMinutesTarget, weeklyMinutesTarget);
         if (updated <= 0) {
             throw SmartReadException.notFound("未找到当前用户的阅读计划：" + planId);
         }
@@ -370,6 +590,9 @@ public class SmartReadService {
         result.put("progress", progress);
         result.put("scrollOffset", scrollOffset);
         result.put("status", status);
+        if (targetDays != null) {
+            result.put("targetDays", targetDays);
+        }
         if (dailyMinutesTarget != null) {
             result.put("dailyMinutesTarget", dailyMinutesTarget);
         }
@@ -386,6 +609,57 @@ public class SmartReadService {
         String type = Payloads.text(payload, "type", "ai_answer");
         long id = repository.createNote(userId, bookId, content, type);
         return Map.of("id", id, "type", type);
+    }
+
+    public Map<String, Object> createReaderHighlight(Map<String, Object> payload) {
+        long userId = Payloads.number(payload, "user_id", 10086L);
+        long bookId = Payloads.number(payload, "book_id", 0L);
+        String chapterId = Payloads.text(payload, "chapter_id", "");
+        int paragraphIndex = Payloads.integer(payload, "paragraph_index", -1);
+        String selectedText = Payloads.text(payload, "selected_text", "").trim();
+        int startOffset = Math.max(0, Payloads.integer(payload, "start_offset", 0));
+        int endOffset = Math.max(startOffset, Payloads.integer(payload, "end_offset", selectedText.length()));
+        if (userId <= 0) {
+            throw SmartReadException.badRequest("请先登录后再标记文本");
+        }
+        if (bookId <= 0 || chapterId.isBlank() || paragraphIndex < 0) {
+            throw SmartReadException.badRequest("缺少标记位置参数");
+        }
+        if (selectedText.isBlank()) {
+            throw SmartReadException.badRequest("请选择需要标记的文本");
+        }
+        return repository.createReaderHighlight(
+                userId,
+                bookId,
+                chapterId,
+                paragraphIndex,
+                startOffset,
+                endOffset,
+                selectedText,
+                Payloads.text(payload, "book_title", ""),
+                Payloads.text(payload, "chapter_title", ""));
+    }
+
+    public Map<String, Object> createReaderComment(Map<String, Object> payload) {
+        long userId = Payloads.number(payload, "user_id", 10086L);
+        long bookId = Payloads.number(payload, "book_id", 0L);
+        String chapterId = Payloads.text(payload, "chapter_id", "");
+        int paragraphIndex = Payloads.integer(payload, "paragraph_index", -1);
+        String selectedText = Payloads.text(payload, "selected_text", "").trim();
+        String content = Payloads.text(payload, "content", "").trim();
+        if (userId <= 0) {
+            throw SmartReadException.badRequest("请先登录后再评论");
+        }
+        if (bookId <= 0 || chapterId.isBlank() || paragraphIndex < 0) {
+            throw SmartReadException.badRequest("缺少评论位置参数");
+        }
+        if (selectedText.isBlank()) {
+            throw SmartReadException.badRequest("请选择需要评论的文本");
+        }
+        if (content.isBlank()) {
+            throw SmartReadException.badRequest("评论内容不能为空");
+        }
+        return repository.createReaderComment(userId, bookId, chapterId, paragraphIndex, selectedText, content);
     }
 
     public Map<String, Object> confirmPurchase(Map<String, Object> payload) {
@@ -415,6 +689,26 @@ public class SmartReadService {
             throw SmartReadException.badRequest("请输入 11 位中国大陆手机号。");
         }
         return normalized;
+    }
+
+    private void ensureActiveUser(Map<String, Object> user) {
+        if (user == null) {
+            throw SmartReadException.notFound("未找到用户");
+        }
+        String status = String.valueOf(user.getOrDefault("status", "active"));
+        if ("deleted".equalsIgnoreCase(status) || "cancelled".equalsIgnoreCase(status)) {
+            throw SmartReadException.badRequest("账号已注销，不能继续登录或修改资料");
+        }
+    }
+
+    private String generateSystemPassword() {
+        final String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        SecureRandom random = new SecureRandom();
+        StringBuilder builder = new StringBuilder("SR");
+        for (int i = 0; i < 8; i++) {
+            builder.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        }
+        return builder.toString();
     }
 
     private void validatePassword(String password) {
@@ -487,5 +781,12 @@ public class SmartReadService {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 不可用", ex);
         }
+    }
+
+    private record RecommendContext(long userId, String query, int page, Map<String, Object> enriched) {
+    }
+
+    private record ChatContext(long userId, long bookId, String question, String chapterId,
+                               Map<String, Object> enriched) {
     }
 }

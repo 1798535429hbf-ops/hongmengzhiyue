@@ -32,7 +32,7 @@ class Settings:
     mysql_database: str = os.getenv("MYSQL_DATABASE", "hongmeng_zhiyue")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
-    deepseek_thinking: str = os.getenv("DEEPSEEK_THINKING", "disabled")
+    deepseek_thinking: str = os.getenv("DEEPSEEK_THINKING", "enabled")
     deepseek_max_tokens: int = int(os.getenv("DEEPSEEK_MAX_TOKENS", "2048"))
     deepseek_temperature: float = env_float("DEEPSEEK_TEMPERATURE", 0.6)
     deepseek_use_proxy: bool = env_bool("DEEPSEEK_USE_PROXY", False)

@@ -128,16 +128,23 @@ export struct CategoryContent {
   @Prop pageWidth: number = 390;
   @State panelMode: PanelMode = 'gender';
   @State selectedAudience: AudienceKey = 'male';
+  @State selectedTagAudience: AudienceKey = 'male';
   @State focusArea: FocusArea = 'male';
   @State selectedCategoryKey: string = 'all';
   @State selectedTagFilter: string = '';
-  @State audienceBooks: Book[] = [];
+  @State books: Book[] = [];
+  @State humanityBooks: Book[] = [];
+  @State geographyBooks: Book[] = [];
+  @State historyBooks: Book[] = [];
+  @State politicsBooks: Book[] = [];
+  @State scienceBooks: Book[] = [];
+  @State philosophyBooks: Book[] = [];
   @State busyText: string = '';
   @State errorText: string = '';
   loadToken: number = 0;
 
   aboutToAppear(): void {
-    this.reloadAudienceBooks();
+    this.reloadBooks();
   }
 
   isCompact(): boolean {
@@ -182,8 +189,17 @@ export struct CategoryContent {
     return `${this.currentAudienceOption().label}向`;
   }
 
-  currentAudienceKeyword(): string {
-    return this.currentAudienceOption().keyword;
+  tagAudienceOption(): AudienceOption {
+    for (let i = 0; i < AUDIENCE_OPTIONS.length; i++) {
+      if (AUDIENCE_OPTIONS[i].key === this.selectedTagAudience) {
+        return AUDIENCE_OPTIONS[i];
+      }
+    }
+    return AUDIENCE_OPTIONS[0];
+  }
+
+  tagAudienceKeyword(): string {
+    return this.tagAudienceOption().keyword;
   }
 
   audienceTitle(): string {
@@ -231,13 +247,101 @@ export struct CategoryContent {
     return '';
   }
 
+  bookTagsText(book: Book): string {
+    return `${book.tags || ''},${book.category || ''}`;
+  }
+
+  hasAudienceTag(audience: AudienceKey): boolean {
+    const keyword = audience === 'male' ? AUDIENCE_OPTIONS[0].keyword : AUDIENCE_OPTIONS[1].keyword;
+    for (let i = 0; i < this.books.length; i++) {
+      if (this.matchesTag(this.books[i], keyword)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  booksForAudience(audience: AudienceKey): Book[] {
+    if (!this.hasAudienceTag(audience)) {
+      return this.books;
+    }
+    const keyword = audience === 'male' ? AUDIENCE_OPTIONS[0].keyword : AUDIENCE_OPTIONS[1].keyword;
+    const values: Book[] = [];
+    for (let i = 0; i < this.books.length; i++) {
+      const book = this.books[i];
+      if (this.matchesTag(book, keyword)) {
+        values.push(book);
+      }
+    }
+    return values;
+  }
+
+  currentAudienceBooks(): Book[] {
+    return this.booksForAudience(this.selectedAudience);
+  }
+
+  tagAudienceBooks(): Book[] {
+    return this.booksForAudience(this.selectedTagAudience);
+  }
+
+  filterBooksForAudience(values: Book[], audience: AudienceKey): Book[] {
+    if (!this.hasAudienceTag(audience)) {
+      return values;
+    }
+    const keyword = audience === 'male' ? AUDIENCE_OPTIONS[0].keyword : AUDIENCE_OPTIONS[1].keyword;
+    const filtered: Book[] = [];
+    for (let i = 0; i < values.length; i++) {
+      if (this.matchesTag(values[i], keyword)) {
+        filtered.push(values[i]);
+      }
+    }
+    return filtered;
+  }
+
+  localCategoryBooks(categoryKey: string): Book[] {
+    const values: Book[] = [];
+    for (let i = 0; i < this.books.length; i++) {
+      const book = this.books[i];
+      if (this.matchesCategory(book, categoryKey)) {
+        values.push(book);
+      }
+    }
+    return values;
+  }
+
+  rawCategoryBooks(categoryKey: string): Book[] {
+    if (categoryKey === 'humanity') {
+      return this.humanityBooks.length > 0 ? this.humanityBooks : this.localCategoryBooks(categoryKey);
+    }
+    if (categoryKey === 'geography') {
+      return this.geographyBooks.length > 0 ? this.geographyBooks : this.localCategoryBooks(categoryKey);
+    }
+    if (categoryKey === 'history') {
+      return this.historyBooks.length > 0 ? this.historyBooks : this.localCategoryBooks(categoryKey);
+    }
+    if (categoryKey === 'politics') {
+      return this.politicsBooks.length > 0 ? this.politicsBooks : this.localCategoryBooks(categoryKey);
+    }
+    if (categoryKey === 'science') {
+      return this.scienceBooks.length > 0 ? this.scienceBooks : this.localCategoryBooks(categoryKey);
+    }
+    if (categoryKey === 'philosophy') {
+      return this.philosophyBooks.length > 0 ? this.philosophyBooks : this.localCategoryBooks(categoryKey);
+    }
+    return this.localCategoryBooks(categoryKey);
+  }
+
+  categoryBooksForKey(categoryKey: string): Book[] {
+    return this.filterBooksForAudience(this.rawCategoryBooks(categoryKey), this.selectedAudience);
+  }
+
   audienceBooksFiltered(): Book[] {
     const filtered: Book[] = [];
-    for (let i = 0; i < this.audienceBooks.length; i++) {
-      const book = this.audienceBooks[i];
-      if (this.selectedCategoryKey !== 'all' && !this.matchesCategory(book, this.selectedCategoryKey)) {
-        continue;
-      }
+    const sourceBooks = this.selectedCategoryKey === 'all'
+      ? this.currentAudienceBooks()
+      : this.categoryBooksForKey(this.selectedCategoryKey);
+    for (let i = 0; i < sourceBooks.length; i++) {
+      const book = sourceBooks[i];
       if (this.selectedTagFilter && !this.matchesTag(book, this.selectedTagFilter)) {
         continue;
       }
@@ -256,12 +360,12 @@ export struct CategoryContent {
         return true;
       }
     }
-    const haystack = `${book.title} ${book.author} ${book.summary} ${book.tags}`;
+    const haystack = this.bookTagsText(book);
     return haystack.indexOf(tag) >= 0;
   }
 
   bookHaystack(book: Book): string {
-    return `${book.title} ${book.author} ${book.summary} ${book.tags} ${book.category || ''}`;
+    return this.bookTagsText(book);
   }
 
   matchesKnownCategory(book: Book): boolean {
@@ -305,13 +409,7 @@ export struct CategoryContent {
     const groups = this.categoryTabs();
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
-      const books: Book[] = [];
-      for (let index = 0; index < this.audienceBooks.length; index++) {
-        const book = this.audienceBooks[index];
-        if (this.matchesCategory(book, group.key)) {
-          books.push(book);
-        }
-      }
+      const books = this.categoryBooksForKey(group.key);
       cards.push({
         key: group.key,
         title: group.title,
@@ -326,23 +424,18 @@ export struct CategoryContent {
     return cards;
   }
 
-  categoryKeyForTag(tag: string): string {
-    if (!tag) {
-      return 'all';
-    }
-    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
-      const group = SUBJECT_GROUPS[i];
-      if (tag === group.title) {
-        return group.key;
-      }
-      for (let index = 0; index < group.aliases.length; index++) {
-        const alias = group.aliases[index];
-        if (tag === alias || tag.indexOf(alias) >= 0 || alias.indexOf(tag) >= 0) {
-          return group.key;
-        }
-      }
-    }
-    return 'all';
+  categoryCardKey(card: CategoryCard): string {
+    const sampleId = card.sampleBook ? card.sampleBook.id : 0;
+    return `${this.selectedAudience}_${card.key}_${card.count}_${sampleId}`;
+  }
+
+  categoryTabKey(group: SubjectGroup): string {
+    return `${this.selectedCategoryKey}_${group.key}`;
+  }
+
+  tagCardKey(tag: TagCard): string {
+    const sampleId = tag.sampleBook ? tag.sampleBook.id : 0;
+    return `${this.selectedTagAudience}_${tag.tag}_${tag.count}_${sampleId}`;
   }
 
   topCategoryCards(): CategoryCard[] {
@@ -360,12 +453,13 @@ export struct CategoryContent {
 
   tagCards(): TagCard[] {
     const values: TagCard[] = [];
-    for (let i = 0; i < this.audienceBooks.length; i++) {
-      const book = this.audienceBooks[i];
+    const sourceBooks = this.tagAudienceBooks();
+    for (let i = 0; i < sourceBooks.length; i++) {
+      const book = sourceBooks[i];
       const tags = this.splitTags(book.tags);
       for (let index = 0; index < tags.length; index++) {
         const tag = tags[index];
-        if (!tag || tag === '男生向' || tag === '女生向' || tag === this.currentAudienceKeyword()) {
+        if (!tag || tag === '男生向' || tag === '女生向' || tag === this.tagAudienceKeyword()) {
           continue;
         }
         let cardIndex = this.tagCardIndex(values, tag);
@@ -375,7 +469,7 @@ export struct CategoryContent {
             tag,
             count: 0,
             tone,
-            accent: this.currentAudienceOption().accent,
+            accent: this.tagAudienceOption().accent,
             books: [],
             sampleBook: null,
           });
@@ -408,25 +502,78 @@ export struct CategoryContent {
     return this.tagCards().slice(4);
   }
 
-  async reloadAudienceBooks(): Promise<void> {
+  appendUniqueBooks(values: Book[], next: Book[]): Book[] {
+    const merged: Book[] = [];
+    for (let i = 0; i < values.length; i++) {
+      merged.push(values[i]);
+    }
+    for (let i = 0; i < next.length; i++) {
+      const book = next[i];
+      let exists = false;
+      for (let index = 0; index < merged.length; index++) {
+        if (merged[index].id === book.id) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) {
+        merged.push(book);
+      }
+    }
+    return merged;
+  }
+
+  async loadBooksByTag(tag: string): Promise<Book[]> {
+    let loadedBooks = await ApiClient.searchBooks('', tag, 0, 50);
+    if (loadedBooks && loadedBooks.length >= 50) {
+      const nextPageBooks = await ApiClient.searchBooks('', tag, 1, 50);
+      loadedBooks = this.appendUniqueBooks(loadedBooks, nextPageBooks || []);
+    }
+    return Array.isArray(loadedBooks) ? loadedBooks : [];
+  }
+
+  async safeLoadBooksByTag(tag: string): Promise<Book[]> {
+    try {
+      return await this.loadBooksByTag(tag);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  async reloadBooks(): Promise<void> {
     const token = ++this.loadToken;
     this.busyText = '正在读取分类';
     this.errorText = '';
     try {
-      let books = await ApiClient.searchBooks(this.currentAudienceKeyword(), '', 0, 50);
-      if (!books || books.length === 0) {
-        books = await ApiClient.searchBooks('', '', 0, 50);
-      }
+      const loadedBooks = await this.loadBooksByTag('');
+      const humanityBooks = await this.safeLoadBooksByTag('人文');
+      const geographyBooks = await this.safeLoadBooksByTag('地理');
+      const historyBooks = await this.safeLoadBooksByTag('历史');
+      const politicsBooks = await this.safeLoadBooksByTag('政治');
+      const scienceBooks = await this.safeLoadBooksByTag('科学');
+      const philosophyBooks = await this.safeLoadBooksByTag('哲学');
       if (token !== this.loadToken) {
         return;
       }
-      this.audienceBooks = Array.isArray(books) ? books : [];
+      this.books = loadedBooks;
+      this.humanityBooks = humanityBooks;
+      this.geographyBooks = geographyBooks;
+      this.historyBooks = historyBooks;
+      this.politicsBooks = politicsBooks;
+      this.scienceBooks = scienceBooks;
+      this.philosophyBooks = philosophyBooks;
     } catch (err) {
       if (token !== this.loadToken) {
         return;
       }
       this.errorText = `分类加载失败：${err}`;
-      this.audienceBooks = [];
+      this.books = [];
+      this.humanityBooks = [];
+      this.geographyBooks = [];
+      this.historyBooks = [];
+      this.politicsBooks = [];
+      this.scienceBooks = [];
+      this.philosophyBooks = [];
     } finally {
       if (token === this.loadToken) {
         this.busyText = '';
@@ -435,27 +582,20 @@ export struct CategoryContent {
   }
 
   switchAudience(audience: AudienceKey): void {
-    const audienceChanged = this.selectedAudience !== audience;
     this.selectedAudience = audience;
     this.focusArea = audience;
     this.selectedCategoryKey = 'all';
     this.selectedTagFilter = '';
     this.panelMode = 'gender';
-    if (audienceChanged) {
-      this.reloadAudienceBooks();
-    }
+    this.selectedTagAudience = audience;
   }
 
   switchTagAudience(audience: AudienceKey): void {
-    const audienceChanged = this.selectedAudience !== audience;
-    this.selectedAudience = audience;
-    this.focusArea = audience;
+    this.selectedTagAudience = audience;
+    this.focusArea = 'tags';
     this.selectedCategoryKey = 'all';
     this.selectedTagFilter = '';
     this.panelMode = 'tags';
-    if (audienceChanged) {
-      this.reloadAudienceBooks();
-    }
   }
 
   openAllWorks(categoryKey: string = 'all'): void {
@@ -474,6 +614,7 @@ export struct CategoryContent {
 
   openTagPanel(): void {
     this.focusArea = 'tags';
+    this.selectedTagAudience = 'male';
     this.selectedTagFilter = '';
     this.selectedCategoryKey = 'all';
     this.panelMode = 'tags';
@@ -487,15 +628,55 @@ export struct CategoryContent {
   }
 
   selectTag(tag: string): void {
+    this.selectedAudience = this.selectedTagAudience;
     this.focusArea = this.selectedAudience;
     this.selectedTagFilter = tag;
-    this.selectedCategoryKey = this.categoryKeyForTag(tag);
+    this.selectedCategoryKey = 'all';
     this.panelMode = 'all';
   }
 
   selectCategoryTab(categoryKey: string): void {
     this.selectedCategoryKey = categoryKey;
     this.selectedTagFilter = '';
+  }
+
+  isCategoryTabSelected(categoryKey: string): boolean {
+    return this.selectedCategoryKey === categoryKey;
+  }
+
+  isTagAudienceSelected(audience: AudienceKey): boolean {
+    return this.selectedTagAudience === audience;
+  }
+
+  tagAudienceAccent(audience: AudienceKey): string {
+    return audience === 'female' ? AUDIENCE_OPTIONS[1].accent : AUDIENCE_OPTIONS[0].accent;
+  }
+
+  isSideAreaSelected(area: FocusArea): boolean {
+    if (area === 'tags') {
+      return this.panelMode === 'tags';
+    }
+    return this.panelMode !== 'tags' && this.selectedAudience === area;
+  }
+
+  sideItemAccent(area: FocusArea): string {
+    if (area === 'female') {
+      return AUDIENCE_OPTIONS[1].accent;
+    }
+    if (area === 'tags') {
+      return Theme.mobilePurple;
+    }
+    return AUDIENCE_OPTIONS[0].accent;
+  }
+
+  sideItemTone(area: FocusArea): string {
+    if (area === 'female') {
+      return AUDIENCE_OPTIONS[1].soft;
+    }
+    if (area === 'tags') {
+      return '#F4EEF9';
+    }
+    return AUDIENCE_OPTIONS[0].soft;
   }
 
   openBook(book: Book): void {
@@ -580,9 +761,9 @@ export struct CategoryContent {
   @Builder
   SideBar() {
     Column({ space: 10 }) {
-      this.SideItem('男生', this.focusArea === 'male', AUDIENCE_OPTIONS[0].accent, AUDIENCE_OPTIONS[0].soft, () => this.switchAudience('male'))
-      this.SideItem('女生', this.focusArea === 'female', AUDIENCE_OPTIONS[1].accent, AUDIENCE_OPTIONS[1].soft, () => this.switchAudience('female'))
-      this.SideItem('标签', this.focusArea === 'tags', Theme.mobilePurple, '#F4EEF9', () => this.openTagPanel())
+      this.SideItem('男生', 'male', () => this.switchAudience('male'))
+      this.SideItem('女生', 'female', () => this.switchAudience('female'))
+      this.SideItem('标签', 'tags', () => this.openTagPanel())
     }
     .width(this.sidebarWidth())
     .height('100%')
@@ -592,24 +773,24 @@ export struct CategoryContent {
   }
 
   @Builder
-  SideItem(label: string, selected: boolean, accent: string, tone: string, action: () => void) {
+  SideItem(label: string, area: FocusArea, action: () => void) {
     Row() {
       Column() {}
         .width(4)
         .height(26)
         .borderRadius(2)
-        .backgroundColor(selected ? accent : 'transparent')
+        .backgroundColor(this.isSideAreaSelected(area) ? this.sideItemAccent(area) : 'transparent')
 
       Text(label)
-        .fontColor(selected ? accent : Theme.mobileText)
+        .fontColor(this.isSideAreaSelected(area) ? this.sideItemAccent(area) : Theme.mobileText)
         .fontSize(this.isCompact() ? 15 : 16)
-        .fontWeight(selected ? FontWeight.Medium : FontWeight.Regular)
+        .fontWeight(this.isSideAreaSelected(area) ? FontWeight.Medium : FontWeight.Regular)
         .margin({ left: 12 })
     }
     .width('100%')
     .height(this.isCompact() ? 46 : 50)
     .padding({ left: 10, right: 10 })
-    .backgroundColor(selected ? tone : '#FFFFFF')
+    .backgroundColor(this.isSideAreaSelected(area) ? this.sideItemTone(area) : '#FFFFFF')
     .borderRadius(14)
     .onClick(() => action())
   }
@@ -618,7 +799,7 @@ export struct CategoryContent {
   GenderPanel() {
     Column({ space: 14 }) {
       Row() {
-        Text(`共 ${this.formatCount(this.audienceBooks.length)}`)
+        Text(`共 ${this.formatCount(this.currentAudienceBooks().length)}`)
           .fontColor(Theme.mobileText)
           .fontSize(this.isCompact() ? 16 : 18)
           .fontWeight(FontWeight.Medium)
@@ -631,7 +812,7 @@ export struct CategoryContent {
           GridItem() {
             this.CategoryCard(card)
           }
-        }, (card: CategoryCard) => card.key)
+        }, (card: CategoryCard) => this.categoryCardKey(card))
       }
       .columnsTemplate('1fr 1fr')
       .columnsGap(12)
@@ -738,10 +919,10 @@ export struct CategoryContent {
       .alignItems(VerticalAlign.Bottom)
 
       Row({ space: 8 }) {
-        this.CategoryFilterTab('全部', this.selectedCategoryKey === 'all', () => this.selectCategoryTab('all'))
+        this.CategoryFilterTab('全部', 'all', () => this.selectCategoryTab('all'))
         ForEach(this.categoryTabs(), (group: SubjectGroup) => {
-          this.CategoryFilterTab(group.title, this.selectedCategoryKey === group.key, () => this.selectCategoryTab(group.key))
-        }, (group: SubjectGroup) => group.key)
+          this.CategoryFilterTab(group.title, group.key, () => this.selectCategoryTab(group.key))
+        }, (group: SubjectGroup) => this.categoryTabKey(group))
       }
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
@@ -775,18 +956,18 @@ export struct CategoryContent {
   }
 
   @Builder
-  CategoryFilterTab(label: string, selected: boolean, action: () => void) {
+  CategoryFilterTab(label: string, categoryKey: string, action: () => void) {
     Column({ space: 6 }) {
       Text(label)
-        .fontColor(selected ? Theme.mobileText : Theme.mobileSubtext)
+        .fontColor(this.isCategoryTabSelected(categoryKey) ? Theme.mobileText : Theme.mobileSubtext)
         .fontSize(this.isCompact() ? 13 : 14)
-        .fontWeight(selected ? FontWeight.Medium : FontWeight.Regular)
+        .fontWeight(this.isCategoryTabSelected(categoryKey) ? FontWeight.Medium : FontWeight.Regular)
         .maxLines(1)
       Row() {}
-        .width(selected ? 22 : 0)
+        .width(this.isCategoryTabSelected(categoryKey) ? 22 : 0)
         .height(3)
         .borderRadius(2)
-        .backgroundColor(selected ? this.currentAudienceOption().accent : 'transparent')
+        .backgroundColor(this.isCategoryTabSelected(categoryKey) ? this.currentAudienceOption().accent : 'transparent')
     }
     .padding({ left: 2, right: 2, top: 6, bottom: 6 })
     .onClick(() => action())
@@ -872,8 +1053,8 @@ export struct CategoryContent {
   TagPanel() {
     Column({ space: 14 }) {
       Row({ space: 18 }) {
-        this.TagAudienceTab('男生标签', this.selectedAudience === 'male', AUDIENCE_OPTIONS[0].accent, () => this.switchTagAudience('male'))
-        this.TagAudienceTab('女生标签', this.selectedAudience === 'female', AUDIENCE_OPTIONS[1].accent, () => this.switchTagAudience('female'))
+        this.TagAudienceTab('男生标签', 'male', () => this.switchTagAudience('male'))
+        this.TagAudienceTab('女生标签', 'female', () => this.switchTagAudience('female'))
       }
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
@@ -893,7 +1074,7 @@ export struct CategoryContent {
             GridItem() {
               this.TagSquare(tag, true)
             }
-          }, (tag: TagCard) => tag.tag)
+          }, (tag: TagCard) => this.tagCardKey(tag))
         }
         .columnsTemplate('1fr 1fr')
         .columnsGap(12)
@@ -916,7 +1097,7 @@ export struct CategoryContent {
             GridItem() {
               this.TagSquare(tag, false)
             }
-          }, (tag: TagCard) => tag.tag)
+          }, (tag: TagCard) => this.tagCardKey(tag))
         }
         .columnsTemplate(this.pageWidth >= 720 ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr')
         .columnsGap(12)
@@ -928,17 +1109,17 @@ export struct CategoryContent {
   }
 
   @Builder
-  TagAudienceTab(label: string, selected: boolean, accent: string, action: () => void) {
+  TagAudienceTab(label: string, audience: AudienceKey, action: () => void) {
     Column({ space: 6 }) {
       Text(label)
-        .fontColor(selected ? Theme.mobileText : Theme.mobileSubtext)
+        .fontColor(this.isTagAudienceSelected(audience) ? Theme.mobileText : Theme.mobileSubtext)
         .fontSize(this.isCompact() ? 17 : 18)
-        .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
+        .fontWeight(this.isTagAudienceSelected(audience) ? FontWeight.Bold : FontWeight.Medium)
       Row() {}
-        .width(selected ? 36 : 0)
+        .width(this.isTagAudienceSelected(audience) ? 36 : 0)
         .height(4)
         .borderRadius(2)
-        .backgroundColor(selected ? accent : 'transparent')
+        .backgroundColor(this.isTagAudienceSelected(audience) ? this.tagAudienceAccent(audience) : 'transparent')
     }
     .padding({ top: 4, bottom: 4 })
     .onClick(() => action())

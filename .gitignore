@@ -51,5 +51,43 @@ Thumbs.db
 .worktrees/
 runtime-logs/
 
+# Local Codex / DevEco verification artifacts
+harmony-app/.deps/
+harmony-app/.sdk/
+harmony-app/.sdkdl/
+harmony-app/_codex_backend_test_*/
+harmony-app/_hvigor_local/
+harmony-app/.hvigor_localhome/
+harmony-app/.tmp-hdc/
+harmony-app/artifacts/
+harmony-app/hvigorw.js
+harmony-app/hvigorw.local.bat
+harmony-app/*.png
+harmony-app/*.jpg
+harmony-app/*.jpeg
+harmony-app/*.json
+!harmony-app/package.json
+!harmony-app/tsconfig.json
+!harmony-app/*.config.json
+harmony-app/after-*
+harmony-app/back-*
+harmony-app/codex-*
+harmony-app/current-*
+harmony-app/desktop-*
+harmony-app/home-*
+harmony-app/layout_*
+harmony-app/launch-*
+harmony-app/plan-*
+harmony-app/post-*
+harmony-app/reader-*
+harmony-app/reader_*
+harmony-app/relaunch-*
+harmony-app/retry-*
+harmony-app/retry2-*
+harmony-app/retry3-*
+harmony-app/smartread-*
+harmony-app/store-*
+harmony-app/verify-*
+
 # Logs
 *.log

@@ -32,6 +32,12 @@ export interface Book {
   catalogVolumes?: CatalogVolume[];
 }
 
+export interface BookTagsBundle {
+  study: string[];
+  general: string[];
+  all: string[];
+}
+
 export interface CatalogVolume {
   id: string;
   title: string;
@@ -47,19 +53,25 @@ export interface VolumeItem {
 export interface RecommendationBook {
   id: number;
   title: string;
-  author: string;
-  difficulty: string;
-  reason: string;
+  author?: string;
+  difficulty?: string;
+  reason?: string;
   highlight?: string;
   coverColor?: string;
+  subtitle?: string;
+  titleOnly?: boolean;
 }
 
 export interface SourceRef {
   chunk_id: number;
   book_id: number;
+  bookId?: number;
   title: string;
   source: string;
   text: string;
+  chapterId?: string;
+  chapter_id?: string;
+  url?: string;
 }
 
 export interface ReadingChapter {
@@ -102,6 +114,33 @@ export interface BookmarkItem {
   createdAt: string;
 }
 
+export interface ReaderHighlight {
+  id: number;
+  userId: number;
+  bookId: number;
+  chapterId: string;
+  paragraphIndex: number;
+  startOffset?: number;
+  endOffset?: number;
+  selectedText: string;
+  bookTitle: string;
+  chapterTitle: string;
+  createdAt: string;
+}
+
+export interface ReaderComment {
+  id: number;
+  userId: number;
+  userName: string;
+  avatarUrl: string;
+  bookId: number;
+  chapterId: string;
+  paragraphIndex: number;
+  selectedText: string;
+  content: string;
+  createdAt: string;
+}
+
 export interface ReaderBundle {
   book: Book;
   plan: PlanItem | null;
@@ -136,6 +175,8 @@ export interface PlanItem {
   scrollOffset?: number;
   createdAt?: string;
   updatedAt?: string;
+  completedAt?: string;
+  completedDates?: string[];
   coverColor: string;
 }
 
@@ -152,6 +193,7 @@ export interface UserProfile {
   id: number;
   account: string;
   phone: string;
+  email?: string;
   name: string;
   nickname?: string;
   major: string;
@@ -238,18 +280,19 @@ export function emptyBook(): Book {
 
 export function emptyProfile(): UserProfile {
   return {
-    id: 10086,
-    account: '13800010086',
-    phone: '13800010086',
-    name: '测试同学',
-    nickname: '测试同学',
-    major: '计算机科学',
-    grade: '大二',
-    interests: '人工智能,算法,英语备考',
-    goal: '课程拓展与竞赛入门',
+    id: 0,
+    account: '',
+    phone: '',
+    email: '',
+    name: '',
+    nickname: '',
+    major: '',
+    grade: '',
+    interests: '',
+    goal: '',
     intro: '',
     avatarUrl: '',
-    channels: 'library,jd,dangdang,second_hand',
+    channels: '',
   };
 }
 

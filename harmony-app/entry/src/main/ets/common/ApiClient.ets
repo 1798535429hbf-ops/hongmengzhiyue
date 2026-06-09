@@ -1,12 +1,16 @@
 import { http } from '@kit.NetworkKit';
+import { util } from '@kit.ArkTS';
 import {
   AnalyticsEvent,
   ApiEnvelope,
   Book,
+  BookTagsBundle,
   CommerceResult,
   PlanItem,
   ProfileBundle,
   ReaderBundle,
+  ReaderComment,
+  ReaderHighlight,
   ReadingStats,
   ReadingChapter,
   ReadingContent,
@@ -36,6 +40,11 @@ export interface RecommendResult {
   follow_up_suggestion: string;
   sources: SourceRef[];
   tool_trace?: ToolTrace[];
+  reasoning?: string;
+  reasoning_content?: string;
+  hidden_reasoning?: string;
+  stream_id?: string;
+  response_mode?: string;
   llm_status: string;
 }
 
@@ -50,7 +59,21 @@ export interface ChatResult {
   answer: string;
   sources: SourceRef[];
   follow_up_suggestion: string;
+  tool_trace?: ToolTrace[];
+  reasoning?: string;
+  reasoning_content?: string;
+  hidden_reasoning?: string;
+  stream_id?: string;
+  response_mode?: string;
   llm_status: string;
+}
+
+export interface AiStreamCallbacks<T> {
+  onDelta?: (text: string) => void;
+  onReasoning?: (text: string) => void;
+  onStatus?: (text: string) => void;
+  onResult?: (result: T) => void;
+  onError?: (message: string) => void;
 }
 
 export interface ChatOptions {
@@ -97,12 +120,15 @@ interface ChatRequest {
   paragraph?: string;
   allow_external_search?: boolean;
   tone?: string;
+  reasoning_policy?: string;
+  answer_scope?: string;
   response_mode?: string;
   require_sources?: boolean;
   allow_partial_answer?: boolean;
 }
 
 export interface PlanTargetOptions {
+  targetDays?: number;
   dailyMinutesTarget?: number;
   weeklyMinutesTarget?: number;
 }
@@ -122,6 +148,27 @@ interface SaveNoteRequest {
   type: string;
 }
 
+interface ReaderHighlightRequest {
+  user_id: number;
+  book_id: number;
+  chapter_id: string;
+  paragraph_index: number;
+  start_offset?: number;
+  end_offset?: number;
+  selected_text: string;
+  book_title: string;
+  chapter_title: string;
+}
+
+interface ReaderCommentRequest {
+  user_id: number;
+  book_id: number;
+  chapter_id: string;
+  paragraph_index: number;
+  selected_text: string;
+  content: string;
+}
+
 interface FavoriteRequest {
   user_id: number;
   book_id: number;
@@ -131,6 +178,7 @@ interface SaveProfileRequest {
   user_id: number;
   account: string;
   phone: string;
+  email?: string;
   name: string;
   nickname?: string;
   major: string;
@@ -145,6 +193,31 @@ interface SaveProfileRequest {
 interface PhoneAuthRequest {
   phone: string;
   password: string;
+}
+
+interface ChangePasswordRequest {
+  user_id: number;
+  old_password: string;
+  new_password: string;
+}
+
+interface ResetPasswordRequest {
+  phone: string;
+}
+
+interface BindEmailRequest {
+  user_id: number;
+  email: string;
+}
+
+interface DeleteAccountRequest {
+  user_id: number;
+}
+
+export interface ResetPasswordResult {
+  phone: string;
+  generatedPassword: string;
+  message: string;
 }
 
 interface ProviderAuthRequest {
@@ -172,6 +245,7 @@ interface UpdateProgressRequest {
   user_id: number;
   book_id: number;
   chapter_id: string;
+  target_days?: number;
   progress: number;
   scroll_offset: number;
   status: string;
@@ -198,7 +272,56 @@ interface RebuildProfileAnalysisRequest {
   force?: boolean;
 }
 
+interface BookSearchPage {
+  items?: Book[];
+  records?: Book[];
+  list?: Book[];
+  content?: Book[];
+}
+
+interface AiStreamRawEvent {
+  type?: string;
+  event?: string;
+  delta?: string;
+  text?: string;
+  content?: string;
+  status?: string;
+  message?: string;
+  data?: object | string;
+  result?: object;
+  final?: object;
+  done?: boolean;
+  code?: number;
+  answer?: string;
+  reason?: string;
+  intent?: string;
+  book_list?: RecommendationBook[];
+  llm_status?: string;
+}
+
 export class ApiClient {
+  private static normalizeBookList(payload: Book[] | BookSearchPage): Book[] {
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+    if (!payload) {
+      return [];
+    }
+    if (Array.isArray(payload.items)) {
+      return payload.items;
+    }
+    if (Array.isArray(payload.records)) {
+      return payload.records;
+    }
+    if (Array.isArray(payload.list)) {
+      return payload.list;
+    }
+    if (Array.isArray(payload.content)) {
+      return payload.content;
+    }
+    return [];
+  }
+
   private static markActiveBaseUrl(baseUrl: string): void {
     if (baseUrl) {
       activeApiBaseUrl = baseUrl;
@@ -228,100 +351,122 @@ export class ApiClient {
       text.includes('格式不稳定') || text.includes('保守推荐') || text.includes('解析错误');
   }
 
+  private static cleanFollowUpSuggestion(text: string): string {
+    const value: string = (text || '').trim();
+    if (!value) {
+      return '';
+    }
+    const noisy: string[] = [
+      '告诉我你',
+      '发我一段',
+      '把你卡住',
+      '换成更具体',
+      '补充专业',
+      '继续追问',
+      '问某一章',
+      '指定章节',
+    ];
+    for (let i = 0; i < noisy.length; i++) {
+      if (value.indexOf(noisy[i]) >= 0) {
+        return '';
+      }
+    }
+    return value;
+  }
+
+  static preferStreamText(current: string, candidate: string): string {
+    const currentText: string = (current || '').trim();
+    const candidateText: string = (candidate || '').trim();
+    if (!currentText) {
+      return candidateText;
+    }
+    if (!candidateText) {
+      return currentText;
+    }
+    if (candidateText.length >= currentText.length + 24 ||
+      candidateText.length >= Math.floor(currentText.length * 1.25)) {
+      return candidateText;
+    }
+    return currentText;
+  }
+
+  private static isReaderAnalysisResult(result: RecommendResult): boolean {
+    const intent: string = (result.intent || '').toLowerCase();
+    const status: string = (result.llm_status || '').toLowerCase();
+    return intent === 'smalltalk' || intent === 'clarify' || intent === 'interest_analysis' || intent === 'chat' ||
+      status === 'context_analysis' || status === 'general_guidance';
+  }
+
   private static normalizeRecommendResult(result: RecommendResult, query: string): RecommendResult {
-    const books: RecommendationBook[] = (result.book_list || []).filter((book: RecommendationBook) => {
-      return !!book && book.id > 0 && !!book.title;
-    });
-    const reason: string = ApiClient.isWeakAiText(result.reason || '')
-      ? ''
-      : (result.reason || '');
+    const books: RecommendationBook[] = [];
+    const rawBooks: RecommendationBook[] = result.book_list || [];
+    for (let i = 0; i < rawBooks.length; i++) {
+      const book: RecommendationBook = rawBooks[i];
+      const title: string = (book && book.title ? book.title : '').trim();
+      if (!title) {
+        continue;
+      }
+      const bookId: number = book.id || 0;
+      if (bookId <= 0 || book.titleOnly) {
+        books.push({
+          id: 0,
+          title,
+          titleOnly: true,
+        });
+      } else {
+        books.push({
+          id: bookId,
+          title,
+          author: book.author || '',
+          difficulty: book.difficulty || '',
+          reason: book.reason || '',
+          highlight: book.highlight || '',
+          coverColor: book.coverColor || '',
+          subtitle: book.subtitle || '',
+          titleOnly: false,
+        });
+      }
+    }
     return {
       intent: result.intent || 'recommend',
       book_list: books,
-      reason: reason || (books.length > 0
-        ? ApiClient.recommendationLead(books)
-        : ''),
-      difficulty: result.difficulty || (books.length > 0 ? books[0].difficulty : ''),
-      follow_up_suggestion: result.follow_up_suggestion || '可以点开一本看详情，或者补充专业、难度、阅读目的，我再缩小范围。',
+      reason: ApiClient.isWeakAiText(result.reason || '') ? '' : (result.reason || ''),
+      difficulty: result.difficulty || (books.length > 0 ? (books[0].difficulty || '') : ''),
+      follow_up_suggestion: ApiClient.cleanFollowUpSuggestion(result.follow_up_suggestion || ''),
       sources: result.sources || [],
       tool_trace: result.tool_trace || [],
+      reasoning: result.reasoning || result.reasoning_content || result.hidden_reasoning || '',
+      reasoning_content: result.reasoning_content || result.reasoning || result.hidden_reasoning || '',
+      hidden_reasoning: result.hidden_reasoning || result.reasoning_content || result.reasoning || '',
+      stream_id: result.stream_id || '',
+      response_mode: result.response_mode || 'final_with_collapsed_reasoning',
       llm_status: ApiClient.isWeakAiStatus(result.llm_status || '') ? 'recovered' : (result.llm_status || 'ok'),
     };
   }
 
-  private static recommendFromRealBooks(query: string, books: Book[]): RecommendResult {
-    const list: RecommendationBook[] = books.slice(0, 6).map((book: Book) => {
-      const item: RecommendationBook = {
-        id: book.id,
-        title: book.title,
-        author: book.author,
-        difficulty: book.difficulty,
-        reason: book.summary
-          ? `${book.summary.slice(0, 72)}${book.summary.length > 72 ? '...' : ''}`
-          : '这本书和你刚才的方向比较接近，可以继续进入详情、阅读或伴读。',
-        coverColor: book.coverColor,
-      };
-      return item;
-    });
+  private static normalizeChatResult(result: ChatResult): ChatResult {
     return {
-      intent: 'recommend',
-      book_list: list,
-      reason: list.length > 0
-        ? ApiClient.recommendationLead(list)
-        : '这次没找到足够合适、可点击的书。你可以换个更具体的关键词，比如专业、考试目标或想读的难度。',
-      difficulty: list.length > 0 ? list[0].difficulty : '',
-      follow_up_suggestion: list.length > 0 ? '先点开第一本看详情；如果不是这个方向，换一个更具体的关键词。' : '可以补充专业、用途、难度或具体主题，我再帮你缩小范围。',
-      sources: [],
-      tool_trace: [
-        { tool: 'ai_recommend', status: 'recovered', detail: 'used_book_search_results' },
-        { tool: 'books_search', status: list.length > 0 ? 'ok' : 'empty' },
-      ],
-      llm_status: list.length > 0 ? 'recovered' : 'insufficient_data',
+      answer: result.answer || '',
+      sources: result.sources || [],
+      follow_up_suggestion: ApiClient.cleanFollowUpSuggestion(result.follow_up_suggestion || ''),
+      tool_trace: result.tool_trace || [],
+      reasoning: result.reasoning || result.reasoning_content || result.hidden_reasoning || '',
+      reasoning_content: result.reasoning_content || result.reasoning || result.hidden_reasoning || '',
+      hidden_reasoning: result.hidden_reasoning || result.reasoning_content || result.reasoning || '',
+      stream_id: result.stream_id || '',
+      response_mode: result.response_mode || 'final_with_collapsed_reasoning',
+      llm_status: result.llm_status || 'ok',
     };
-  }
-
-  private static recommendationLead(books: RecommendationBook[]): string {
-    if (books.length <= 0) {
-      return '';
-    }
-    const first: RecommendationBook = books[0];
-    if (books.length === 1) {
-      return `我推荐先读《${first.title}》。${first.reason || '它和你现在的方向比较贴近，适合先点进详情看一眼。'}`;
-    }
-    const second: RecommendationBook = books[1];
-    return `我推荐先读《${first.title}》，理由是${first.reason || '它最贴近你现在的方向'}；再把《${second.title}》作为对照，理由是${second.reason || '它能补上另一个角度'}。`;
-  }
-
-  private static fallbackSearchQuery(query: string): string {
-    const normalized: string = (query || '').trim();
-    if (!normalized || normalized.startsWith('换一批')) {
-      return '';
-    }
-    const topicHints: string[] = [
-      '人工智能', '机器学习', '深度学习', '算法', '计算机', '数据结构', '数据库', '操作系统',
-      'Python', 'Go', 'Linux', '英语', '考研', '人文', '文学', '历史', '地理', '哲学',
-      '心理学', '设计', '经济', '创业', '物理', '数学'
-    ];
-    for (let i = 0; i < topicHints.length; i++) {
-      if (normalized.indexOf(topicHints[i]) >= 0) {
-        return topicHints[i];
-      }
-    }
-    const cleaned = normalized
-      .replace('推荐适合我的书', '')
-      .replace('最近有什么好书', '')
-      .replace('帮我制定阅读计划', '')
-      .replace('帮我挑书', '')
-      .trim();
-    if (!cleaned || cleaned.indexOf('推荐') >= 0 || cleaned.indexOf('好书') >= 0 || cleaned.length > 12) {
-      return '';
-    }
-    return cleaned;
   }
 
   static async searchBooks(keyword: string, tag: string = '', page: number = 0, size: number = 30): Promise<Book[]> {
     const path = `/books/search?keyword=${encodeURIComponent(keyword)}&tag=${encodeURIComponent(tag)}&page=${page}&size=${size}`;
-    return await ApiClient.get<Book[]>(path);
+    const payload = await ApiClient.get<Book[] | BookSearchPage>(path);
+    return ApiClient.normalizeBookList(payload);
+  }
+
+  static async bookTags(): Promise<BookTagsBundle> {
+    return await ApiClient.get<BookTagsBundle>('/books/tags');
   }
 
   static async storeBooks(section: string, userId: number = 10086, page: number = 0, size: number = 30): Promise<Book[]> {
@@ -348,19 +493,12 @@ export class ApiClient {
   }
 
   static async recommend(userId: number, query: string, offset: number = 0): Promise<RecommendResult> {
-    const payload: RecommendRequest = {
-      user_id: userId,
-      query,
-      response_mode: 'strict_json_grounded',
-      require_sources: true,
-      allow_external_search: true,
-      auto_import_missing_books: true,
-      persist_missing_books: true,
-      import_policy: 'insert_missing_metadata_and_chunks_before_return',
-      offset,
-    };
+    const payload: RecommendRequest = ApiClient.recommendPayload(userId, query, offset);
     const first: RecommendResult = await ApiClient.post<RecommendResult>('/ai/recommend', payload);
     const normalized: RecommendResult = ApiClient.normalizeRecommendResult(first, query);
+    if (ApiClient.isReaderAnalysisResult(normalized) && !ApiClient.isWeakAiText(normalized.reason || '')) {
+      return normalized;
+    }
     if (normalized.book_list.length > 0 && !ApiClient.isWeakAiStatus(first.llm_status || '') && !ApiClient.isWeakAiText(first.reason || '')) {
       return normalized;
     }
@@ -382,45 +520,67 @@ export class ApiClient {
       if (retryNormalized.book_list.length > 0 && !ApiClient.isWeakAiText(retryNormalized.reason)) {
         return retryNormalized;
       }
+      return retryNormalized;
     } catch (_) {
     }
+    return normalized;
+  }
 
-    const books: Book[] = await ApiClient.searchBooks(ApiClient.fallbackSearchQuery(query), '', Math.max(0, offset), 6);
-    return ApiClient.recommendFromRealBooks(query, books);
+  static async recommendStream(
+    userId: number,
+    query: string,
+    offset: number = 0,
+    callbacks: AiStreamCallbacks<RecommendResult> = {}
+  ): Promise<RecommendResult> {
+    const payload: RecommendRequest = ApiClient.recommendPayload(userId, query, offset);
+    const normalize = (result: object): RecommendResult => ApiClient.normalizeRecommendResult(result as RecommendResult, query);
+    const streamCallbacks: AiStreamCallbacks<RecommendResult> = ApiClient.silentStreamErrors(callbacks);
+    try {
+      return await ApiClient.streamRequest<RecommendResult>('/ai/recommend/stream', payload, streamCallbacks, normalize);
+    } catch (streamErr) {
+      callbacks.onStatus && callbacks.onStatus('流式连接失败，正在切换普通回答');
+      try {
+        const fallback: RecommendResult = normalize(await ApiClient.post<RecommendResult>('/ai/recommend', payload));
+        callbacks.onResult && callbacks.onResult(fallback);
+        return fallback;
+      } catch (fallbackErr) {
+        const message: string = `AI 连接失败，请确认后端 8081 和 AI 服务可用。${fallbackErr || streamErr}`;
+        callbacks.onError && callbacks.onError(message);
+        throw new Error(message);
+      }
+    }
   }
 
   static async chat(userId: number, bookId: number, question: string, options: ChatOptions = {}): Promise<ChatResult> {
-    const payload: ChatRequest = {
-      user_id: userId,
-      book_id: bookId,
-      question,
-      chapter_id: options.chapterId || '',
-      paragraph: options.paragraph || '',
-      allow_external_search: options.allowExternalSearch === undefined ? true : options.allowExternalSearch,
-      tone: options.tone || 'warm_companion',
-      response_mode: 'strict_json_grounded',
-      require_sources: true,
-      allow_partial_answer: true,
-    };
+    const payload: ChatRequest = ApiClient.chatPayload(userId, bookId, question, options);
     const result: ChatResult = await ApiClient.post<ChatResult>('/ai/chat', payload);
-    if (!ApiClient.isWeakAiText(result.answer || '') && !ApiClient.isWeakAiStatus(result.llm_status || '')) {
-      return result;
+    return ApiClient.normalizeChatResult(result);
+  }
+
+  static async chatStream(
+    userId: number,
+    bookId: number,
+    question: string,
+    options: ChatOptions = {},
+    callbacks: AiStreamCallbacks<ChatResult> = {}
+  ): Promise<ChatResult> {
+    const payload: ChatRequest = ApiClient.chatPayload(userId, bookId, question, options);
+    const normalize = (result: object): ChatResult => ApiClient.normalizeChatResult(result as ChatResult);
+    const streamCallbacks: AiStreamCallbacks<ChatResult> = ApiClient.silentStreamErrors(callbacks);
+    try {
+      return await ApiClient.streamRequest<ChatResult>('/ai/chat/stream', payload, streamCallbacks, normalize);
+    } catch (streamErr) {
+      callbacks.onStatus && callbacks.onStatus('流式连接失败，正在切换普通回答');
+      try {
+        const fallback: ChatResult = normalize(await ApiClient.post<ChatResult>('/ai/chat', payload));
+        callbacks.onResult && callbacks.onResult(fallback);
+        return fallback;
+      } catch (fallbackErr) {
+        const message: string = `AI 连接失败，请确认后端 8081 和 AI 服务可用。${fallbackErr || streamErr}`;
+        callbacks.onError && callbacks.onError(message);
+        throw new Error(message);
+      }
     }
-    const sources: SourceRef[] = result.sources || [];
-    if (sources.length > 0) {
-      return {
-        answer: `我先看这本书里已经能追溯到的片段：${sources.slice(0, 2).map((source: SourceRef) => source.text).join(' ')} 所以这次建议你先围绕这些已经出现的概念和章节线索读，再点开参考依据核对细节。`,
-        sources,
-        follow_up_suggestion: result.follow_up_suggestion || '可以把问题缩小到某一章、某个概念或某段摘录，我会给出更精确的伴读回答。',
-        llm_status: 'recovered',
-      };
-    }
-    return {
-      answer: '这次没有拿到足够可靠的来源片段，我不会编造答案。请先进入阅读器确认章节已入库，或换成更具体的问题，比如“第一章的核心概念是什么”。',
-      sources: [],
-      follow_up_suggestion: '确认图书章节和 book_chunk 已入库后再提问，伴读回答会更稳。',
-      llm_status: 'insufficient_data',
-    };
   }
 
   static async createPlan(userId: number, bookId: number, targetDays: number = 14, options: PlanTargetOptions = {}): Promise<object> {
@@ -456,6 +616,7 @@ export class ApiClient {
       user_id: userId,
       book_id: bookId,
       chapter_id: chapterId,
+      target_days: options.targetDays,
       progress,
       scroll_offset: scrollOffset,
       status,
@@ -468,6 +629,7 @@ export class ApiClient {
   static async updatePlanTargets(
     userId: number,
     plan: PlanItem,
+    targetDays: number,
     dailyMinutesTarget: number,
     weeklyMinutesTarget: number
   ): Promise<ReadingProgress> {
@@ -479,7 +641,7 @@ export class ApiClient {
       plan.progress || 0,
       plan.scrollOffset || 0,
       plan.status || 'reading',
-      { dailyMinutesTarget, weeklyMinutesTarget }
+      { targetDays, dailyMinutesTarget, weeklyMinutesTarget }
     );
   }
 
@@ -491,6 +653,67 @@ export class ApiClient {
   static async saveReadingNote(userId: number, bookId: number, content: string): Promise<object> {
     const payload: SaveNoteRequest = { user_id: userId, book_id: bookId, content, type: 'reading_excerpt' };
     return await ApiClient.post<object>('/notes', payload);
+  }
+
+  static async listReaderHighlights(userId: number, bookId: number, chapterId: string): Promise<ReaderHighlight[]> {
+    return await ApiClient.get<ReaderHighlight[]>(
+      `/reader/highlights?userId=${userId}&bookId=${bookId}&chapterId=${encodeURIComponent(chapterId)}`
+    );
+  }
+
+  static async createReaderHighlight(
+    userId: number,
+    bookId: number,
+    chapterId: string,
+    paragraphIndex: number,
+    selectedText: string,
+    bookTitle: string,
+    chapterTitle: string,
+    startOffset: number = 0,
+    endOffset: number = 0
+  ): Promise<ReaderHighlight> {
+    const payload: ReaderHighlightRequest = {
+      user_id: userId,
+      book_id: bookId,
+      chapter_id: chapterId,
+      paragraph_index: paragraphIndex,
+      start_offset: startOffset,
+      end_offset: endOffset,
+      selected_text: selectedText,
+      book_title: bookTitle,
+      chapter_title: chapterTitle,
+    };
+    return await ApiClient.post<ReaderHighlight>('/reader/highlights', payload);
+  }
+
+  static async listReaderComments(
+    userId: number,
+    bookId: number,
+    chapterId: string,
+    paragraphIndex: number
+  ): Promise<ReaderComment[]> {
+    return await ApiClient.get<ReaderComment[]>(
+      `/reader/comments?userId=${userId}&bookId=${bookId}&chapterId=${encodeURIComponent(chapterId)}&paragraphIndex=${paragraphIndex}`
+    );
+  }
+
+  static async createReaderComment(
+    userId: number,
+    bookId: number,
+    chapterId: string,
+    paragraphIndex: number,
+    selectedText: string,
+    content: string
+  ): Promise<ReaderComment> {
+    const payload: ReaderCommentRequest = {
+      user_id: userId,
+      book_id: bookId,
+      chapter_id: chapterId,
+      paragraph_index: paragraphIndex,
+      selected_text: selectedText,
+      content,
+    };
+    return await ApiClient.post<ReaderComment>('/reader/comments', payload);
   }
 
   static async favorite(userId: number, bookId: number): Promise<Book[]> {
@@ -511,6 +734,7 @@ export class ApiClient {
       user_id: profile.id,
       account: profile.account,
       phone: profile.phone,
+      email: profile.email || '',
       name: profile.name,
       nickname: profile.nickname || profile.name,
       major: profile.major,
@@ -534,6 +758,30 @@ export class ApiClient {
       { name: 'file', contentType: ApiClient.contentTypeForFile(fileName), remoteFileName: fileName, filePath },
     ]);
     return data.avatarUrl || '';
+  }
+
+  static async bindEmail(userId: number, email: string): Promise<UserProfile> {
+    const payload: BindEmailRequest = { user_id: userId, email };
+    return await ApiClient.post<UserProfile>('/users/email/bind', payload);
+  }
+
+  static async changePassword(userId: number, oldPassword: string, newPassword: string): Promise<object> {
+    const payload: ChangePasswordRequest = {
+      user_id: userId,
+      old_password: oldPassword,
+      new_password: newPassword,
+    };
+    return await ApiClient.post<object>('/users/password/change', payload);
+  }
+
+  static async resetPassword(phone: string): Promise<ResetPasswordResult> {
+    const payload: ResetPasswordRequest = { phone };
+    return await ApiClient.post<ResetPasswordResult>('/users/password/reset', payload);
+  }
+
+  static async deleteAccount(userId: number): Promise<object> {
+    const payload: DeleteAccountRequest = { user_id: userId };
+    return await ApiClient.post<object>('/users/account/delete', payload);
   }
 
   static async trackEvent(event: AnalyticsEvent): Promise<object> {
@@ -621,6 +869,231 @@ export class ApiClient {
       payload.file_path = filePath;
     }
     return await ApiClient.post<ImportBookResult>('/import/books', payload);
+  }
+
+  private static recommendPayload(userId: number, query: string, offset: number = 0): RecommendRequest {
+    return {
+      user_id: userId,
+      query,
+      response_mode: 'stream_json_grounded',
+      require_sources: true,
+      allow_external_search: true,
+      auto_import_missing_books: false,
+      persist_missing_books: false,
+      import_policy: 'title_only_when_database_has_no_available_books',
+      offset,
+    };
+  }
+
+  private static chatPayload(userId: number, bookId: number, question: string, options: ChatOptions = {}): ChatRequest {
+    return {
+      user_id: userId,
+      book_id: bookId,
+      question,
+      chapter_id: options.chapterId || '',
+      paragraph: options.paragraph || '',
+      allow_external_search: options.allowExternalSearch === undefined ? true : options.allowExternalSearch,
+      tone: options.tone || 'warm_companion',
+      reasoning_policy: 'grounded_sources_plus_deepseek_reasoning',
+      answer_scope: 'Use retrieved book evidence for book facts, and use DeepSeek general reasoning for explanation, analogies, reading advice, and concept connections. If evidence is insufficient, label the answer as general guidance instead of inventing book content.',
+      response_mode: 'stream_json_grounded',
+      require_sources: true,
+      allow_partial_answer: true,
+    };
+  }
+
+  private static decodeStreamChunk(decoder: util.TextDecoder, chunk: ArrayBuffer): string {
+    try {
+      return decoder.decodeWithStream(new Uint8Array(chunk), { stream: true });
+    } catch (_) {
+      return '';
+    }
+  }
+
+  private static emitStreamLine<T>(
+    line: string,
+    callbacks: AiStreamCallbacks<T>,
+    normalize: (result: object) => T
+  ): T | null {
+    const value: string = ApiClient.streamLinePayload(line);
+    if (!value) {
+      return null;
+    }
+    let event: AiStreamRawEvent;
+    try {
+      event = JSON.parse(value) as AiStreamRawEvent;
+    } catch (_) {
+      callbacks.onDelta && callbacks.onDelta(value);
+      return null;
+    }
+    return ApiClient.emitStreamEvent<T>(event, callbacks, normalize);
+  }
+
+  private static streamLinePayload(line: string): string {
+    let value: string = (line || '').trim();
+    if (!value || value === '[DONE]') {
+      return '';
+    }
+    if (value.startsWith(':') || value.startsWith('event:') || value.startsWith('id:') || value.startsWith('retry:')) {
+      return '';
+    }
+    if (value.startsWith('data:')) {
+      value = value.substring(5).trim();
+    }
+    return value === '[DONE]' ? '' : value;
+  }
+
+  private static emitStreamEvent<T>(
+    event: AiStreamRawEvent,
+    callbacks: AiStreamCallbacks<T>,
+    normalize: (result: object) => T
+  ): T | null {
+    if (event.code !== undefined && event.code !== 0) {
+      callbacks.onError && callbacks.onError(event.message || 'AI 流式响应失败');
+      return null;
+    }
+    if (event.code === 0 && event.data !== undefined) {
+      if (typeof event.data === 'string') {
+        return ApiClient.emitStreamLine<T>(event.data, callbacks, normalize);
+      }
+      const nested: AiStreamRawEvent = event.data as AiStreamRawEvent;
+      const nestedResult: T | null = ApiClient.emitStreamEvent<T>(nested, callbacks, normalize);
+      if (nestedResult || nested.type || nested.event || nested.delta || nested.text || nested.content ||
+        nested.status || nested.message || nested.final || nested.result || nested.data ||
+        nested.answer || nested.reason || nested.book_list || nested.llm_status) {
+        return nestedResult;
+      }
+      const normalized: T = normalize(event.data as object);
+      callbacks.onResult && callbacks.onResult(normalized);
+      return normalized;
+    }
+
+    const type: string = (event.type || event.event || '').toLowerCase();
+    if (type === 'delta' || type === 'answer_delta' || type === 'content_delta' ||
+      type === 'message_delta' || type === 'text_delta' || type === 'token' || type === 'reason_delta') {
+      callbacks.onDelta && callbacks.onDelta(event.delta || event.text || event.content || '');
+      return null;
+    }
+    if (type === 'reasoning' || type === 'thinking') {
+      callbacks.onReasoning && callbacks.onReasoning(event.delta || event.text || event.content || '');
+      return null;
+    }
+    if (type === 'status') {
+      callbacks.onStatus && callbacks.onStatus(event.status || event.message || '');
+      return null;
+    }
+    if (type === 'error') {
+      callbacks.onError && callbacks.onError(event.message || 'AI 流式响应失败');
+      return null;
+    }
+    if (!type && (event.delta || event.text || event.content) && !event.answer && !event.reason) {
+      callbacks.onDelta && callbacks.onDelta(event.delta || event.text || event.content || '');
+      return null;
+    }
+    if (type === 'final' || type === 'result' || type === 'done' || type === 'complete' ||
+      event.done || event.final || event.result || event.data ||
+      event.answer !== undefined || event.reason !== undefined || event.book_list !== undefined) {
+      let raw: object | null = null;
+      if (event.final) {
+        raw = event.final;
+      } else if (event.result) {
+        raw = event.result;
+      } else if (event.data && typeof event.data !== 'string') {
+        raw = event.data as object;
+      } else if (event.answer !== undefined || event.reason !== undefined || event.book_list !== undefined) {
+        raw = event as object;
+      }
+      if (!raw) {
+        return null;
+      }
+      const normalized: T = normalize(raw);
+      callbacks.onResult && callbacks.onResult(normalized);
+      return normalized;
+    }
+    return null;
+  }
+
+  private static async streamRequest<T>(
+    path: string,
+    body: object,
+    callbacks: AiStreamCallbacks<T>,
+    normalize: (result: object) => T
+  ): Promise<T> {
+    let lastError: string = '';
+    for (let i = 0; i < API_BASE_URLS.length; i++) {
+      const client = http.createHttp();
+      const decoder = util.TextDecoder.create('utf-8');
+      let buffer: string = '';
+      let finalResult: T | null = null;
+      let streamError: string = '';
+      try {
+        const result = await new Promise<T>((resolve, reject) => {
+          client.on('dataReceive', (chunk: ArrayBuffer) => {
+            buffer += ApiClient.decodeStreamChunk(decoder, chunk);
+            const lines: string[] = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (let j = 0; j < lines.length; j++) {
+              const next: T | null = ApiClient.emitStreamLine<T>(lines[j], callbacks, normalize);
+              if (next) {
+                finalResult = next;
+              }
+            }
+          });
+          client.on('dataEnd', () => {
+            const tail: string = buffer.trim();
+            if (tail) {
+              const next: T | null = ApiClient.emitStreamLine<T>(tail, callbacks, normalize);
+              if (next) {
+                finalResult = next;
+              }
+            }
+            if (finalResult) {
+              resolve(finalResult);
+            } else if (streamError) {
+              reject(new Error(streamError));
+            } else {
+              reject(new Error('AI 流式响应没有返回最终结果'));
+            }
+          });
+          client.requestInStream(`${API_BASE_URLS[i]}${path}`, {
+            method: http.RequestMethod.POST,
+            header: {
+              'Content-Type': 'application/json',
+              'Accept': 'text/event-stream, application/x-ndjson, application/json',
+            },
+            extraData: JSON.stringify(body),
+            expectDataType: http.HttpDataType.ARRAY_BUFFER,
+            connectTimeout: 5000,
+            readTimeout: 60000,
+          }).then((code: number) => {
+            if (code >= 400) {
+              streamError = `AI 流式接口返回 ${code}`;
+            }
+          }).catch((err: Error) => {
+            reject(err);
+          });
+        });
+        ApiClient.markActiveBaseUrl(API_BASE_URLS[i]);
+        return result;
+      } catch (err) {
+        lastError = `${err}`;
+        callbacks.onError && callbacks.onError(lastError);
+      } finally {
+        client.off('dataReceive');
+        client.off('dataEnd');
+        client.destroy();
+      }
+    }
+    throw new Error(`AI 流式连接失败，请确认后端 8081 和 AI 服务可用。${lastError}`);
+  }
+
+  private static silentStreamErrors<T>(callbacks: AiStreamCallbacks<T>): AiStreamCallbacks<T> {
+    return {
+      onDelta: callbacks.onDelta,
+      onReasoning: callbacks.onReasoning,
+      onStatus: callbacks.onStatus,
+      onResult: callbacks.onResult,
+    };
   }
 
   private static async get<T>(path: string): Promise<T> {

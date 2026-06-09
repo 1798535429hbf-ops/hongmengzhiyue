@@ -1,7 +1,9 @@
+import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Iterator
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pymysql import MySQLError
 
 from .db import query_all
@@ -9,7 +11,7 @@ from .deepseek_client import DeepSeekError
 from .harness import run_eval
 from .mcp_tools import call_tool, list_tools
 from .settings import settings
-from .skills import chat_skill, commerce_skill, recommend_skill
+from .skills import chat_skill, chat_stream, commerce_skill, recommend_skill, recommend_stream
 
 app = FastAPI(title="鸿蒙智阅 AI/RAG Service", version="1.0.0")
 logger = logging.getLogger("hongmeng_zhiyue.ai")
@@ -62,6 +64,14 @@ def recommend(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"AI 推荐内部错误：{exc}") from exc
 
 
+@app.post("/internal/rag/recommend/stream")
+def recommend_stream_endpoint(payload: Dict[str, Any]) -> StreamingResponse:
+    return StreamingResponse(
+        _ndjson_events(recommend_stream(payload), "AI recommend stream failed"),
+        media_type="application/x-ndjson",
+    )
+
+
 @app.post("/internal/rag/chat")
 def chat(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -75,6 +85,14 @@ def chat(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         logger.exception("AI chat failed")
         raise HTTPException(status_code=500, detail=f"AI 伴读内部错误：{exc}") from exc
+
+
+@app.post("/internal/rag/chat/stream")
+def chat_stream_endpoint(payload: Dict[str, Any]) -> StreamingResponse:
+    return StreamingResponse(
+        _ndjson_events(chat_stream(payload), "AI chat stream failed"),
+        media_type="application/x-ndjson",
+    )
 
 
 @app.post("/internal/tools/commerce-search")
@@ -95,3 +113,18 @@ def mcp_call(payload: Dict[str, Any]) -> Dict[str, Any]:
 @app.post("/internal/eval/run")
 def eval_run() -> Dict[str, Any]:
     return run_eval()
+
+
+def _ndjson_events(events: Iterator[Dict[str, Any]], log_prefix: str) -> Iterator[str]:
+    try:
+        for event in events:
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+    except MySQLError as exc:
+        logger.error("%s database failed: %s", log_prefix, exc)
+        yield json.dumps({"type": "error", "message": f"AI 服务数据库连接失败：{exc}"}, ensure_ascii=False) + "\n"
+    except DeepSeekError as exc:
+        logger.error("%s DeepSeek failed: %s", log_prefix, exc)
+        yield json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False) + "\n"
+    except Exception as exc:
+        logger.exception(log_prefix)
+        yield json.dumps({"type": "error", "message": f"AI 流式内部错误：{exc}"}, ensure_ascii=False) + "\n"

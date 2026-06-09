@@ -1,5 +1,5 @@
 import { ApiClient } from './ApiClient';
-import { PlanItem } from './Models';
+import { PlanItem, ReadingStats } from './Models';
 import { openBookDetail, openReader, openSearch, openShelfManage } from './Navigation';
 import { buildContinueItems, buildHistoryItems, formatReadingDuration, ShelfCardItem, ShelfTabMode } from './ShelfPresentation';
 import { ShelfStore, ShelfStoreState } from './ShelfStore';
@@ -134,7 +134,21 @@ export struct ShelfHomePanel {
       this.shelfContinueItems = buildContinueItems(storeState, plans);
       this.shelfHistoryItems = buildHistoryItems(storeState, plans);
       this.shelfVersion++;
-      this.todayReadingLabel = formatReadingDuration(storeState.todayReading.seconds);
+      let todaySeconds: number = storeState.todayReading.seconds;
+      if (userId > 0) {
+        try {
+          const stats: ReadingStats = await ApiClient.readingStats(userId);
+          todaySeconds = Math.max(0, Math.round(stats.todaySeconds || 0));
+          const weekSeconds: number = stats.dailySeconds.reduce((total: number, day) => {
+            return total + Math.max(0, Math.round(day.seconds || 0));
+          }, 0);
+          AppStorage.setOrCreate('smartread_reading_stats_user_id', userId);
+          AppStorage.setOrCreate('smartread_today_reading_seconds', todaySeconds);
+          AppStorage.setOrCreate('smartread_week_reading_seconds', weekSeconds);
+        } catch (_) {
+        }
+      }
+      this.todayReadingLabel = formatReadingDuration(todaySeconds);
     } catch (err) {
       this.shelfErrorText = `书架加载失败：${err}`;
       this.shelfContinueItems = [];

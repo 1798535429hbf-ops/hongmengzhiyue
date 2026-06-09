@@ -1,13 +1,26 @@
 import { ApiClient } from '../common/ApiClient';
-import { Book, PlanItem, ReadingDayStat, ReadingStats } from '../common/Models';
-import { openReader } from '../common/Navigation';
+import { Book, PlanItem, ProfileBundle, ReadingDayStat, ReadingStats } from '../common/Models';
+import {
+  openReader,
+  notifyPlanDataChanged,
+  PLAN_DATA_REFRESH_KEY,
+  PLAN_PROGRESS_BOOK_ID_KEY,
+  PLAN_PROGRESS_CHAPTER_ID_KEY,
+  PLAN_PROGRESS_SCROLL_OFFSET_KEY,
+  PLAN_PROGRESS_STATUS_KEY,
+  PLAN_PROGRESS_UPDATED_AT_KEY,
+  PLAN_PROGRESS_VALUE_KEY,
+} from '../common/Navigation';
+import { LocalShelfBook, RemoteShelfSession, ShelfStore, ShelfStoreState } from '../common/ShelfStore';
 import { Theme } from '../common/Theme';
 import { UserSession } from '../common/UserSession';
+import { common } from '@kit.AbilityKit';
 
 interface PlanDay {
   id: number;
   week: string;
   day: string;
+  dateKey: string;
   state: string;
 }
 
@@ -21,6 +34,17 @@ const PLAN_MUTED: string = '#8B92A0';
 export struct PlanContent {
   @Prop @Watch('onRefreshSeedChange') refreshSeed: number = 0;
   @Prop pageWidth: number = 390;
+  @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
+  @StorageLink('smartread_reading_stats_user_id') @Watch('onSharedReadingStatsChange') sharedReadingStatsUserId: number = 0;
+  @StorageLink('smartread_today_reading_seconds') @Watch('onSharedReadingStatsChange') sharedTodayReadingSeconds: number = 0;
+  @StorageLink('smartread_week_reading_seconds') @Watch('onSharedReadingStatsChange') sharedWeekReadingSeconds: number = 0;
+  @StorageLink(PLAN_DATA_REFRESH_KEY) @Watch('onPlanDataRefreshSignalChange') planDataRefreshSignal: number = 0;
+  @StorageLink(PLAN_PROGRESS_BOOK_ID_KEY) @Watch('onSharedPlanProgressChange') sharedPlanProgressBookId: number = 0;
+  @StorageLink(PLAN_PROGRESS_VALUE_KEY) @Watch('onSharedPlanProgressChange') sharedPlanProgressValue: number = 0;
+  @StorageLink(PLAN_PROGRESS_CHAPTER_ID_KEY) @Watch('onSharedPlanProgressChange') sharedPlanProgressChapterId: string = '';
+  @StorageLink(PLAN_PROGRESS_SCROLL_OFFSET_KEY) @Watch('onSharedPlanProgressChange') sharedPlanProgressScrollOffset: number = 0;
+  @StorageLink(PLAN_PROGRESS_STATUS_KEY) @Watch('onSharedPlanProgressChange') sharedPlanProgressStatus: string = '';
+  @StorageLink(PLAN_PROGRESS_UPDATED_AT_KEY) @Watch('onSharedPlanProgressChange') sharedPlanProgressUpdatedAt: string = '';
   @State plans: PlanItem[] = [];
   @State loading: boolean = false;
   @State errorText: string = '';
@@ -32,21 +56,63 @@ export struct PlanContent {
   @State loadingCandidates: boolean = false;
   @State selectedBookId: number = 0;
   @State selectedTargetDays: number = 14;
+  @State selectedTargetDaysText: string = '14';
   @State creatingPlan: boolean = false;
   @State createPlanError: string = '';
   @State showPlanSettings: boolean = false;
+  @State planSettingsProgress: number = 0;
   @State editingPlanId: number = 0;
+  @State editingTargetDays: number = 14;
   @State editingDailyMinutes: number = 30;
   @State editingWeeklyMinutes: number = 210;
   @State savingPlanSettings: boolean = false;
   @State planSettingsError: string = '';
+  @State calendarExpanded: boolean = false;
+  @State selectedCalendarDateKey: string = '';
+  private planLoadSerial: number = 0;
+  private statsLoadSerial: number = 0;
+  private planSettingsTimer: number = -1;
+  private planSettingsReloadTimer: number = -1;
+  private sharedPlanProgressTimer: number = -1;
 
   aboutToAppear(): void {
     this.loadPlans();
   }
 
+  aboutToDisappear(): void {
+    clearTimeout(this.planSettingsTimer);
+    clearTimeout(this.planSettingsReloadTimer);
+    clearTimeout(this.sharedPlanProgressTimer);
+    this.planSettingsTimer = -1;
+    this.planSettingsReloadTimer = -1;
+    this.sharedPlanProgressTimer = -1;
+  }
+
   onRefreshSeedChange(): void {
     this.loadPlans();
+  }
+
+  onSessionUserChange(): void {
+    this.loadPlans();
+  }
+
+  onSharedReadingStatsChange(): void {
+    const userId: number = UserSession.currentUserId();
+    if (userId > 0) {
+      this.applySharedReadingStats(userId);
+    }
+  }
+
+  onPlanDataRefreshSignalChange(): void {
+    this.loadPlans();
+  }
+
+  onSharedPlanProgressChange(): void {
+    clearTimeout(this.sharedPlanProgressTimer);
+    this.sharedPlanProgressTimer = setTimeout(() => {
+      this.applySharedPlanProgress(true);
+      this.sharedPlanProgressTimer = -1;
+    }, 16);
   }
 
   isCompact(): boolean {
@@ -55,6 +121,10 @@ export struct PlanContent {
 
   cardRadius(): number {
     return this.isCompact() ? 18 : 22;
+  }
+
+  hostContext(): common.UIAbilityContext | undefined {
+    return getContext(this) as common.UIAbilityContext | undefined;
   }
 
   currentPlan(): PlanItem | null {
@@ -79,7 +149,11 @@ export struct PlanContent {
 
   heroDays(): number {
     const plan = this.currentPlan();
-    return plan ? Math.max(1, plan.targetDays) : 21;
+    return plan ? this.planTargetDays(plan) : 21;
+  }
+
+  planTargetDays(plan: PlanItem | null): number {
+    return Math.max(1, Math.min(999, Math.round(plan?.targetDays || 21)));
   }
 
   planProgress(plan: PlanItem | null): number {
@@ -89,12 +163,31 @@ export struct PlanContent {
     return Math.max(0, Math.min(100, Math.round(plan.progress || 0)));
   }
 
+  timestampMs(value: string): number {
+    const text: string = (value || '').trim();
+    if (!text) {
+      return 0;
+    }
+    const time: number = new Date(text).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  shouldUseIncomingProgress(plan: PlanItem, incomingUpdatedAt: string): boolean {
+    const incomingTime: number = this.timestampMs(incomingUpdatedAt);
+    const planTime: number = this.timestampMs(plan.updatedAt || '');
+    if (incomingTime <= 0 || planTime <= 0) {
+      return true;
+    }
+    return incomingTime >= planTime;
+  }
+
   completedDays(): number {
     const plan = this.currentPlan();
     if (!plan) {
       return 0;
     }
-    return Math.min(plan.targetDays, Math.round(plan.targetDays * this.planProgress(plan) / 100));
+    const targetDays: number = this.planTargetDays(plan);
+    return Math.min(targetDays, Math.round(targetDays * this.planProgress(plan) / 100));
   }
 
   remainingDays(): number {
@@ -102,7 +195,7 @@ export struct PlanContent {
     if (!plan) {
       return 0;
     }
-    return Math.max(0, plan.targetDays - this.completedDays());
+    return Math.max(0, this.planTargetDays(plan) - this.completedDays());
   }
 
   finishedBookCount(): number {
@@ -143,7 +236,11 @@ export struct PlanContent {
   }
 
   progressWidth(plan: PlanItem | null, maxWidth: number): number {
-    return Math.max(8, Math.round(maxWidth * this.planProgress(plan) / 100));
+    const progress: number = this.planProgress(plan);
+    if (progress <= 0) {
+      return 0;
+    }
+    return Math.max(8, Math.round(maxWidth * progress / 100));
   }
 
   progressTrackWidth(): number {
@@ -162,6 +259,144 @@ export struct PlanContent {
     return Math.max(1, Math.round(plan?.weeklyMinutesTarget || this.planDailyTarget(plan) * 7));
   }
 
+  localSessionForBook(sessions: RemoteShelfSession[], bookId: number): RemoteShelfSession | null {
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessions[i].bookId === bookId) {
+        return sessions[i];
+      }
+    }
+    return null;
+  }
+
+  mergeLocalSessionProgress(plans: PlanItem[], sessions: RemoteShelfSession[]): PlanItem[] {
+    const nextPlans: PlanItem[] = [];
+    for (let i = 0; i < plans.length; i++) {
+      const plan: PlanItem = plans[i];
+      const session: RemoteShelfSession | null = this.localSessionForBook(sessions, plan.bookId);
+      const localProgress: number = session ? Math.max(0, Math.min(100, Math.round(session.progress || 0))) : 0;
+      const backendProgress: number = Math.max(0, Math.min(100, Math.round(plan.progress || 0)));
+      if (!session || localProgress === backendProgress || !this.shouldUseIncomingProgress(plan, session.updatedAt || '')) {
+        nextPlans.push(plan);
+      } else {
+        nextPlans.push({
+          id: plan.id,
+          bookId: plan.bookId,
+          title: plan.title,
+          author: plan.author,
+          targetDays: plan.targetDays,
+          dailyMinutesTarget: plan.dailyMinutesTarget,
+          weeklyMinutesTarget: plan.weeklyMinutesTarget,
+          progress: localProgress,
+          status: localProgress >= 100 ? 'finished' : 'reading',
+          chapterId: session.chapterId || plan.chapterId,
+          scrollOffset: plan.scrollOffset,
+          createdAt: plan.createdAt,
+          updatedAt: session.updatedAt || plan.updatedAt,
+          completedAt: localProgress >= 100 ? (plan.completedAt || session.updatedAt) : '',
+          completedDates: plan.completedDates,
+          coverColor: plan.coverColor,
+        });
+      }
+    }
+    return nextPlans;
+  }
+
+  mergeSharedPlanProgress(plans: PlanItem[]): PlanItem[] {
+    const bookId: number = Math.round(this.sharedPlanProgressBookId || 0);
+    if (bookId <= 0 || plans.length === 0) {
+      return plans;
+    }
+    const incomingProgress: number = Math.max(0, Math.min(100, Math.round(this.sharedPlanProgressValue || 0)));
+    const incomingChapterId: string = this.sharedPlanProgressChapterId || '';
+    const incomingScrollOffset: number = Math.max(0, Math.round(this.sharedPlanProgressScrollOffset || 0));
+    const incomingUpdatedAt: string = this.sharedPlanProgressUpdatedAt || new Date().toISOString();
+    const nextPlans: PlanItem[] = [];
+    let changed: boolean = false;
+    for (let i = 0; i < plans.length; i++) {
+      const plan: PlanItem = plans[i];
+      if (plan.bookId !== bookId) {
+        nextPlans.push(plan);
+        continue;
+      }
+      const currentProgress: number = this.planProgress(plan);
+      if (!this.shouldUseIncomingProgress(plan, incomingUpdatedAt) && incomingProgress !== currentProgress) {
+        nextPlans.push(plan);
+        continue;
+      }
+      const nextProgress: number = incomingProgress;
+      const nextChapterId: string = incomingChapterId || plan.chapterId || '';
+      const nextScrollOffset: number = incomingScrollOffset || plan.scrollOffset || 0;
+      const nextStatus: string = nextProgress >= 100 ? 'finished' : 'reading';
+      if (nextProgress === currentProgress &&
+        nextChapterId === (plan.chapterId || '') &&
+        nextScrollOffset === (plan.scrollOffset || 0) &&
+        nextStatus === (plan.status || '')) {
+        nextPlans.push(plan);
+        continue;
+      }
+      changed = true;
+      nextPlans.push({
+        id: plan.id,
+        bookId: plan.bookId,
+        title: plan.title,
+        author: plan.author,
+        targetDays: plan.targetDays,
+        dailyMinutesTarget: plan.dailyMinutesTarget,
+        weeklyMinutesTarget: plan.weeklyMinutesTarget,
+        progress: nextProgress,
+        status: nextStatus,
+        chapterId: nextChapterId,
+        scrollOffset: nextScrollOffset,
+        createdAt: plan.createdAt,
+        updatedAt: incomingUpdatedAt,
+        completedAt: nextProgress >= 100 ? (plan.completedAt || incomingUpdatedAt) : '',
+        completedDates: plan.completedDates,
+        coverColor: plan.coverColor,
+      });
+    }
+    return changed ? nextPlans : plans;
+  }
+
+  applySharedPlanProgress(animated: boolean = false): void {
+    const sharedBookId: number = Math.round(this.sharedPlanProgressBookId || 0);
+    const nextPlans: PlanItem[] = this.mergeSharedPlanProgress(this.plans);
+    let matchedPlanId: number = 0;
+    if (sharedBookId > 0) {
+      for (let i = 0; i < nextPlans.length; i++) {
+        if (nextPlans[i].bookId === sharedBookId) {
+          matchedPlanId = nextPlans[i].id;
+          break;
+        }
+      }
+    }
+    if (matchedPlanId > 0 && this.selectedPlanId !== matchedPlanId) {
+      this.selectedPlanId = matchedPlanId;
+    }
+    if (nextPlans === this.plans) {
+      return;
+    }
+    if (animated) {
+      animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
+        this.plans = nextPlans;
+      });
+      return;
+    }
+    this.plans = nextPlans;
+  }
+
+  async localTodayReadingSeconds(userId: number): Promise<number> {
+    const context = this.hostContext();
+    if (!context) {
+      return 0;
+    }
+    try {
+      const storeState: ShelfStoreState = await ShelfStore.load(context, userId);
+      return Math.max(0, Math.round(storeState.todayReading.seconds || 0));
+    } catch (_) {
+      return 0;
+    }
+  }
+
   editingPlan(): PlanItem | null {
     for (let i = 0; i < this.plans.length; i++) {
       if (this.plans[i].id === this.editingPlanId) {
@@ -169,6 +404,81 @@ export struct PlanContent {
       }
     }
     return null;
+  }
+
+  currentPlanCoverItems(): PlanItem[] {
+    const plan = this.currentPlan();
+    return plan ? [plan] : [];
+  }
+
+  formatDateKey(date: Date): string {
+    const year: string = `${date.getFullYear()}`;
+    const month: string = `${date.getMonth() + 1}`.padStart(2, '0');
+    const day: string = `${date.getDate()}`.padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  dateFromKey(dateKey: string): Date | null {
+    if (!dateKey || dateKey.length < 10) {
+      return null;
+    }
+    const date: Date = new Date(`${dateKey.substring(0, 10)}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  monthLabel(): string {
+    const today = new Date();
+    const month: string = `${today.getMonth() + 1}`.padStart(2, '0');
+    return this.calendarExpanded ? `${today.getFullYear()}-${month}` : '本周';
+  }
+
+  isPlanFinishedOn(plan: PlanItem | null, dateKey: string): boolean {
+    if (!plan || !dateKey) {
+      return false;
+    }
+    const explicitDates: string[] = plan.completedDates || [];
+    for (let i = 0; i < explicitDates.length; i++) {
+      if ((explicitDates[i] || '').substring(0, 10) === dateKey) {
+        return true;
+      }
+    }
+    const start = plan.createdAt ? this.dateFromKey(plan.createdAt.substring(0, 10)) : null;
+    const target = this.dateFromKey(dateKey);
+    if (start && target) {
+      const diffDays: number = Math.floor((target.getTime() - start.getTime()) / 86400000);
+      if (diffDays >= 0 && diffDays < this.completedDays()) {
+        return true;
+      }
+    }
+    const doneAt: string = plan.completedAt || ((plan.status === 'finished' || this.planProgress(plan) >= 100) ? (plan.updatedAt || '') : '');
+    return !!doneAt && doneAt.substring(0, 10) === dateKey;
+  }
+
+  calendarPlanDays(): PlanDay[] {
+    const labels: string[] = ['一', '二', '三', '四', '五', '六', '日'];
+    const today = new Date();
+    const todayKey: string = this.formatDateKey(today);
+    const weekday: number = today.getDay() === 0 ? 7 : today.getDay();
+    const start = this.calendarExpanded
+      ? new Date(today.getFullYear(), today.getMonth(), today.getDate() - weekday - 20)
+      : new Date(today.getFullYear(), today.getMonth(), today.getDate() - weekday + 1);
+    const totalDays: number = this.calendarExpanded ? 35 : 7;
+    const dayItems: PlanDay[] = [];
+    for (let i = 0; i < totalDays; i++) {
+      const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const dateKey: string = this.formatDateKey(date);
+      let state: string = 'future';
+      if (this.isPlanFinishedOn(this.currentPlan(), dateKey)) {
+        state = 'done';
+      } else if (dateKey === todayKey) {
+        state = 'today';
+      } else if (date.getTime() < new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) {
+        state = 'missed';
+      }
+      const labelIndex: number = date.getDay() === 0 ? 6 : date.getDay() - 1;
+      dayItems.push({ id: i, week: labels[labelIndex], day: `${date.getDate()}`, dateKey, state });
+    }
+    return dayItems;
   }
 
   calendarDays(): PlanDay[] {
@@ -186,14 +496,17 @@ export struct PlanContent {
       } else if (i === day - 1) {
         state = 'today';
       }
-      days.push({ id: i, week: labels[i], day: `${date.getDate()}`, state });
+      days.push({ id: i, week: labels[i], day: `${date.getDate()}`, dateKey: this.formatDateKey(date), state });
     }
     return days;
   }
 
   async loadPlans(): Promise<void> {
+    const loadSerial: number = ++this.planLoadSerial;
     const userId: number = UserSession.currentUserId();
     if (userId <= 0) {
+      this.statsLoadSerial++;
+      this.setReadingSeconds(0, 0);
       this.plans = [];
       this.errorText = '请先在“我的”页面登录后查看阅读计划。';
       return;
@@ -201,18 +514,34 @@ export struct PlanContent {
 
     this.loading = true;
     this.errorText = '';
+    this.applySharedReadingStats(userId);
     try {
       const items: PlanItem[] = await ApiClient.listPlans(userId);
-      this.plans = items || [];
-      try {
-        const stats: ReadingStats = await ApiClient.readingStats(userId);
-        this.todayReadingSeconds = Math.max(0, Math.round(stats.todaySeconds || 0));
-        this.weekReadingSeconds = this.sumWeekSeconds(stats.dailySeconds || []);
-      } catch (_) {
-        this.todayReadingSeconds = 0;
-        this.weekReadingSeconds = 0;
+      const context = this.hostContext();
+      let localSessions: RemoteShelfSession[] = [];
+      if (context) {
+        try {
+          const storeState: ShelfStoreState = await ShelfStore.load(context, userId);
+          localSessions = storeState.remoteSessions || [];
+        } catch (_) {
+          localSessions = [];
+        }
       }
+      if (loadSerial !== this.planLoadSerial || userId !== UserSession.currentUserId()) {
+        return;
+      }
+      this.plans = this.mergeSharedPlanProgress(this.mergeLocalSessionProgress(items || [], localSessions));
+      await this.refreshReadingStats(userId);
       if (this.plans.length > 0 && this.selectedPlanId <= 0) {
+        const sharedBookId: number = Math.round(this.sharedPlanProgressBookId || 0);
+        if (sharedBookId > 0) {
+          for (let i = 0; i < this.plans.length; i++) {
+            if (this.plans[i].bookId === sharedBookId) {
+              this.selectedPlanId = this.plans[i].id;
+              return;
+            }
+          }
+        }
         const first = this.currentPlan();
         this.selectedPlanId = first ? first.id : this.plans[0].id;
       }
@@ -220,29 +549,175 @@ export struct PlanContent {
       this.plans = [];
       this.errorText = `阅读计划加载失败：${err}`;
     } finally {
-      this.loading = false;
+      if (loadSerial === this.planLoadSerial) {
+        this.loading = false;
+      }
+    }
+  }
+
+  async refreshReadingStats(userId: number): Promise<void> {
+    const statsSerial: number = ++this.statsLoadSerial;
+    try {
+      const stats: ReadingStats = await ApiClient.readingStats(userId);
+      if (statsSerial !== this.statsLoadSerial || userId !== UserSession.currentUserId()) {
+        return;
+      }
+      const backendTodaySeconds: number = Math.max(0, Math.round(stats.todaySeconds || 0));
+      const backendWeekSeconds: number = this.sumWeekSeconds(stats.dailySeconds || []);
+      const sharedTodaySeconds: number = this.sharedReadingStatsUserId === userId
+        ? Math.max(0, Math.round(this.sharedTodayReadingSeconds || 0))
+        : 0;
+      const sharedWeekSeconds: number = this.sharedReadingStatsUserId === userId
+        ? Math.max(0, Math.round(this.sharedWeekReadingSeconds || 0))
+        : 0;
+      const localTodaySeconds: number = await this.localTodayReadingSeconds(userId);
+      if (statsSerial !== this.statsLoadSerial || userId !== UserSession.currentUserId()) {
+        return;
+      }
+      const todaySeconds: number = Math.max(backendTodaySeconds, sharedTodaySeconds, localTodaySeconds);
+      const weekSeconds: number = Math.max(backendWeekSeconds, sharedWeekSeconds, todaySeconds);
+      this.setReadingSeconds(todaySeconds, weekSeconds);
+    } catch (_) {
+      if (statsSerial !== this.statsLoadSerial || userId !== UserSession.currentUserId()) {
+        return;
+      }
+      this.applySharedReadingStats(userId);
+      const localTodaySeconds: number = await this.localTodayReadingSeconds(userId);
+      if (statsSerial !== this.statsLoadSerial || userId !== UserSession.currentUserId()) {
+        return;
+      }
+      if (localTodaySeconds > 0 || this.todayReadingSeconds > 0) {
+        this.setReadingSeconds(
+          Math.max(this.todayReadingSeconds, localTodaySeconds),
+          Math.max(this.weekReadingSeconds, localTodaySeconds)
+        );
+      }
+    }
+  }
+
+  applySharedReadingStats(userId: number): void {
+    if (userId > 0 && this.sharedReadingStatsUserId === userId) {
+      const todaySeconds: number = Math.max(0, Math.round(this.sharedTodayReadingSeconds || 0));
+      const weekSeconds: number = Math.max(0, Math.round(this.sharedWeekReadingSeconds || 0));
+      this.todayReadingSeconds = todaySeconds;
+      this.weekReadingSeconds = weekSeconds;
+    }
+  }
+
+  setReadingSeconds(todaySeconds: number, weekSeconds: number): void {
+    const safeToday: number = Math.max(0, Math.round(todaySeconds || 0));
+    const safeWeek: number = Math.max(0, Math.round(weekSeconds || 0));
+    this.todayReadingSeconds = safeToday;
+    this.weekReadingSeconds = safeWeek;
+    const userId: number = UserSession.currentUserId();
+    if (userId > 0) {
+      this.sharedReadingStatsUserId = userId;
+      this.sharedTodayReadingSeconds = safeToday;
+      this.sharedWeekReadingSeconds = safeWeek;
     }
   }
 
   openCurrentPlan(): void {
     const plan = this.currentPlan();
     if (plan && plan.bookId > 0) {
-      openReader(plan.bookId);
+      openReader(plan.bookId, plan.chapterId || '');
     }
+  }
+
+  hasActivePlanForBook(bookId: number): boolean {
+    for (let i = 0; i < this.plans.length; i++) {
+      if (this.plans[i].bookId === bookId && !(this.plans[i].status === 'finished' && this.planProgress(this.plans[i]) >= 100)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  addCandidate(next: Book[], book: Book): void {
+    if (!book || book.id <= 0 || this.hasActivePlanForBook(book.id)) {
+      return;
+    }
+    for (let i = 0; i < next.length; i++) {
+      if (next[i].id === book.id) {
+        return;
+      }
+    }
+    next.push(book);
+  }
+
+  remoteSessionBook(session: RemoteShelfSession): Book {
+    return {
+      id: session.bookId,
+      isbn: '',
+      title: session.title,
+      author: session.author,
+      tags: session.tags,
+      summary: '',
+      difficulty: session.difficulty,
+      targetReader: '',
+      coverColor: session.coverColor || '#DDE8E3',
+      sourceType: 'shelf',
+    };
+  }
+
+  localShelfBook(book: LocalShelfBook): Book {
+    return {
+      id: book.remoteBookId || 0,
+      isbn: '',
+      title: book.title,
+      author: '本地书架',
+      tags: book.extension ? book.extension.toUpperCase() : 'LOCAL',
+      summary: '',
+      difficulty: '本地导入',
+      targetReader: '',
+      coverColor: '#EEF4FF',
+      sourceType: 'local_shelf',
+    };
+  }
+
+  async loadPlanCandidates(userId: number): Promise<Book[]> {
+    const next: Book[] = [];
+    const context = this.hostContext();
+    if (context) {
+      const shelfState: ShelfStoreState = await ShelfStore.load(context, userId);
+      for (let i = 0; i < shelfState.remoteSessions.length; i++) {
+        this.addCandidate(next, this.remoteSessionBook(shelfState.remoteSessions[i]));
+      }
+      for (let i = 0; i < shelfState.localBooks.length; i++) {
+        if ((shelfState.localBooks[i].remoteBookId || 0) > 0) {
+          this.addCandidate(next, this.localShelfBook(shelfState.localBooks[i]));
+        }
+      }
+    }
+    try {
+      const bundle: ProfileBundle = await ApiClient.profile(userId);
+      const favorites: Book[] = bundle.favorites || [];
+      for (let i = 0; i < favorites.length; i++) {
+        this.addCandidate(next, favorites[i]);
+      }
+    } catch (_) {
+    }
+    return next;
   }
 
   async openCreatePlan(): Promise<void> {
     this.showCreatePlan = true;
     this.createPlanError = '';
-    if (this.planCandidates.length > 0) {
-      return;
-    }
     this.loadingCandidates = true;
     try {
-      const books: Book[] = await ApiClient.searchBooks('', '', 0, 12);
-      this.planCandidates = books || [];
+      const userId: number = UserSession.currentUserId();
+      if (userId <= 0) {
+        this.planCandidates = [];
+        this.selectedBookId = 0;
+        this.createPlanError = '请先登录后再制定阅读计划。';
+        return;
+      }
+      this.planCandidates = await this.loadPlanCandidates(userId);
       if (this.planCandidates.length > 0 && this.selectedBookId <= 0) {
         this.selectedBookId = this.planCandidates[0].id;
+      }
+      if (this.planCandidates.length === 0) {
+        this.selectedBookId = 0;
       }
     } catch (err) {
       this.createPlanError = `候选图书加载失败：${err}`;
@@ -266,7 +741,31 @@ export struct PlanContent {
   }
 
   setTargetDays(days: number): void {
-    this.selectedTargetDays = days;
+    this.selectedTargetDays = this.clampTargetDays(days);
+    this.selectedTargetDaysText = `${this.selectedTargetDays}`;
+    this.createPlanError = '';
+  }
+
+  clampTargetDays(value: number): number {
+    return Math.max(1, Math.min(999, Math.round(value || 0)));
+  }
+
+  updateSelectedTargetDays(value: string): void {
+    this.selectedTargetDaysText = value;
+    const parsed: number = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      this.selectedTargetDays = this.clampTargetDays(parsed);
+      this.createPlanError = '';
+    }
+  }
+
+  adjustSelectedTargetDays(delta: number): void {
+    this.setTargetDays(this.selectedTargetDays + delta);
+  }
+
+  adjustEditingTargetDays(delta: number): void {
+    this.editingTargetDays = this.clampTargetDays(this.editingTargetDays + delta);
+    this.planSettingsError = '';
   }
 
   async submitCreatePlan(): Promise<void> {
@@ -285,7 +784,10 @@ export struct PlanContent {
     this.creatingPlan = true;
     this.createPlanError = '';
     try {
-      await ApiClient.createPlan(userId, this.selectedBookId, this.selectedTargetDays);
+      await ApiClient.createPlan(userId, this.selectedBookId, this.clampTargetDays(this.selectedTargetDays), {
+        dailyMinutesTarget: 30,
+        weeklyMinutesTarget: 210,
+      });
       this.selectedPlanId = 0;
       this.showCreatePlan = false;
       await this.loadPlans();
@@ -301,19 +803,49 @@ export struct PlanContent {
   }
 
   openPlanSettings(plan: PlanItem): void {
+    clearTimeout(this.planSettingsReloadTimer);
+    this.planSettingsReloadTimer = -1;
     this.editingPlanId = plan.id;
+    this.editingTargetDays = this.planTargetDays(plan);
     this.editingDailyMinutes = this.planDailyTarget(plan);
     this.editingWeeklyMinutes = this.planWeeklyTarget(plan);
     this.planSettingsError = '';
     this.showPlanSettings = true;
+    this.planSettingsProgress = 0;
+    clearTimeout(this.planSettingsTimer);
+    this.planSettingsTimer = setTimeout(() => {
+      animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
+        this.planSettingsProgress = 1;
+      });
+      this.planSettingsTimer = -1;
+    }, 16);
   }
 
-  closePlanSettings(): void {
-    if (this.savingPlanSettings) {
+  closePlanSettings(animated: boolean = true, force: boolean = false): void {
+    if (this.savingPlanSettings && !force) {
       return;
     }
-    this.showPlanSettings = false;
-    this.planSettingsError = '';
+    clearTimeout(this.planSettingsTimer);
+    this.planSettingsTimer = -1;
+    if (!this.showPlanSettings) {
+      this.planSettingsProgress = 0;
+      this.planSettingsError = '';
+      return;
+    }
+    if (!animated) {
+      this.planSettingsProgress = 0;
+      this.showPlanSettings = false;
+      this.planSettingsError = '';
+      return;
+    }
+    animateTo({ duration: 160, curve: Curve.EaseIn }, () => {
+      this.planSettingsProgress = 0;
+    });
+    this.planSettingsTimer = setTimeout(() => {
+      this.showPlanSettings = false;
+      this.planSettingsError = '';
+      this.planSettingsTimer = -1;
+    }, 180);
   }
 
   adjustDailyMinutes(delta: number): void {
@@ -334,6 +866,37 @@ export struct PlanContent {
 
   syncWeeklyFromDaily(): void {
     this.editingWeeklyMinutes = this.clampMinutes(this.editingDailyMinutes * 7);
+    this.planSettingsError = '';
+  }
+
+  applyPlanSettingsLocally(planId: number, targetDays: number, dailyMinutesTarget: number, weeklyMinutesTarget: number): void {
+    const nextPlans: PlanItem[] = [];
+    for (let i = 0; i < this.plans.length; i++) {
+      const plan: PlanItem = this.plans[i];
+      if (plan.id !== planId) {
+        nextPlans.push(plan);
+        continue;
+      }
+      nextPlans.push({
+        id: plan.id,
+        bookId: plan.bookId,
+        title: plan.title,
+        author: plan.author,
+        targetDays,
+        dailyMinutesTarget,
+        weeklyMinutesTarget,
+        progress: plan.progress,
+        status: plan.status,
+        chapterId: plan.chapterId,
+        scrollOffset: plan.scrollOffset,
+        createdAt: plan.createdAt,
+        updatedAt: new Date().toISOString(),
+        completedAt: plan.completedAt,
+        completedDates: plan.completedDates,
+        coverColor: plan.coverColor,
+      });
+    }
+    this.plans = nextPlans;
   }
 
   async savePlanSettings(): Promise<void> {
@@ -352,15 +915,25 @@ export struct PlanContent {
     }
     this.savingPlanSettings = true;
     this.planSettingsError = '';
+    const targetDays: number = this.clampTargetDays(this.editingTargetDays);
+    const dailyMinutesTarget: number = this.clampMinutes(this.editingDailyMinutes);
+    const weeklyMinutesTarget: number = Math.max(dailyMinutesTarget, this.clampMinutes(this.editingWeeklyMinutes));
     try {
       await ApiClient.updatePlanTargets(
         userId,
         plan,
-        this.clampMinutes(this.editingDailyMinutes),
-        this.clampMinutes(this.editingWeeklyMinutes)
+        targetDays,
+        dailyMinutesTarget,
+        weeklyMinutesTarget
       );
-      this.showPlanSettings = false;
-      await this.loadPlans();
+      this.applyPlanSettingsLocally(plan.id, targetDays, dailyMinutesTarget, weeklyMinutesTarget);
+      this.selectedPlanId = plan.id;
+      this.closePlanSettings(true, true);
+      clearTimeout(this.planSettingsReloadTimer);
+      this.planSettingsReloadTimer = setTimeout(() => {
+        notifyPlanDataChanged();
+        this.planSettingsReloadTimer = -1;
+      }, 420);
     } catch (err) {
       this.planSettingsError = `计划设置保存失败：${err}`;
     } finally {
@@ -389,43 +962,49 @@ export struct PlanContent {
 
   build() {
     Stack() {
-      Column({ space: this.isCompact() ? 16 : 20 }) {
-        this.TopBar()
+      Scroll() {
+        Column({ space: this.isCompact() ? 16 : 20 }) {
+          this.TopBar()
 
-        if (this.errorText) {
-          this.ErrorBanner()
-        }
+          if (this.errorText) {
+            this.ErrorBanner()
+          }
 
-        if (this.loading && this.plans.length === 0) {
-          this.LoadingState()
-        } else if (this.plans.length === 0) {
-          this.ReadingTimeCard()
-          if (this.showCreatePlan) {
-            this.CreatePlanPanel()
+          if (this.loading && this.plans.length === 0) {
+            this.LoadingState()
+          } else if (this.plans.length === 0) {
+            this.ReadingTimeCard()
+            if (this.showCreatePlan) {
+              this.CreatePlanPanel()
+            } else {
+              this.EmptyState()
+            }
           } else {
-            this.EmptyState()
+            this.HeroCard()
+            this.ReadingTimeCard()
+            if (this.showCreatePlan) {
+              this.CreatePlanPanel()
+            }
+            this.ProgressCard()
+            this.TodayPlanCard()
+            this.CalendarCard()
+            this.AllPlansCard()
           }
-        } else {
-          this.HeroCard()
-          this.ReadingTimeCard()
-          if (this.showCreatePlan) {
-            this.CreatePlanPanel()
-          }
-          this.ProgressCard()
-          this.TodayPlanCard()
-          this.CalendarCard()
-          this.AllPlansCard()
         }
+        .width('100%')
+        .padding({ left: 0, right: 0, bottom: 8 })
+        .backgroundColor(PLAN_BG)
       }
       .width('100%')
-      .padding({ left: 0, right: 0, bottom: 8 })
-      .backgroundColor(PLAN_BG)
+      .height('100%')
+      .scrollBar(BarState.Off)
 
       if (this.showPlanSettings) {
         this.PlanSettingsSheet()
       }
     }
     .width('100%')
+    .height('100%')
     .backgroundColor(PLAN_BG)
   }
 
@@ -458,8 +1037,41 @@ export struct PlanContent {
   @Builder
   ReadingTimeCard() {
     Row({ space: 12 }) {
-      this.TimeStatItem('今日阅读', this.durationText(this.todayReadingSeconds), PLAN_GREEN)
-      this.TimeStatItem('近 7 日', this.durationText(this.weekReadingSeconds), '#5C9CE6')
+      Column({ space: 8 }) {
+        Text('今日阅读')
+          .fontColor(PLAN_MUTED)
+          .fontSize(13)
+        Text(this.durationText(this.todayReadingSeconds))
+          .fontColor(PLAN_GREEN)
+          .fontSize(this.isCompact() ? 18 : 20)
+          .fontWeight(FontWeight.Bold)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .layoutWeight(1)
+      .height(70)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor('#F5F9FA')
+      .borderRadius(14)
+
+      Column({ space: 8 }) {
+        Text('近 7 日')
+          .fontColor(PLAN_MUTED)
+          .fontSize(13)
+        Text(this.durationText(this.weekReadingSeconds))
+          .fontColor('#5C9CE6')
+          .fontSize(this.isCompact() ? 18 : 20)
+          .fontWeight(FontWeight.Bold)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .layoutWeight(1)
+      .height(70)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor('#F5F9FA')
+      .borderRadius(14)
     }
     .width('100%')
     .padding({ left: 18, right: 18, top: 18, bottom: 18 })
@@ -644,8 +1256,16 @@ export struct PlanContent {
       }
       .width('100%')
 
+      this.PlanSwitchChips()
+
       Row({ space: 16 }) {
-        this.BookCover(this.currentPlan())
+        if (this.currentPlanCoverItems().length > 0) {
+          ForEach(this.currentPlanCoverItems(), (plan: PlanItem) => {
+            this.BookCover(plan)
+          }, (plan: PlanItem) => `${plan.id}-${plan.bookId}-${plan.coverColor}-${plan.title}`)
+        } else {
+          this.BookCover(null)
+        }
         Column({ space: 10 }) {
           Text(this.currentPlan()?.title || '暂无计划')
             .fontColor(PLAN_TEXT)
@@ -693,6 +1313,30 @@ export struct PlanContent {
   }
 
   @Builder
+  PlanSwitchChips() {
+    if (this.plans.length > 1) {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+        ForEach(this.plans, (item: PlanItem) => {
+          Text(item.title)
+            .fontColor(this.currentPlan()?.id === item.id ? '#FFFFFF' : PLAN_TEXT)
+            .fontSize(12)
+            .fontWeight(this.currentPlan()?.id === item.id ? FontWeight.Bold : FontWeight.Regular)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+            .margin({ right: 8, bottom: 8 })
+            .backgroundColor(this.currentPlan()?.id === item.id ? PLAN_GREEN : '#F1F4F3')
+            .borderRadius(16)
+            .onClick(() => {
+              this.selectedPlanId = item.id;
+            })
+        }, (item: PlanItem) => `${item.id}-${item.progress}-${item.targetDays}`)
+      }
+      .width('100%')
+    }
+  }
+
+  @Builder
   CalendarCard() {
     Column({ space: 18 }) {
       Row() {
@@ -706,11 +1350,14 @@ export struct PlanContent {
           .fontSize(15)
       }
       .width('100%')
+      .onClick(() => {
+        this.calendarExpanded = !this.calendarExpanded;
+      })
 
-      Row() {
-        ForEach(this.calendarDays(), (item: PlanDay) => {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+        ForEach(this.calendarPlanDays(), (item: PlanDay) => {
           this.CalendarDayCell(item)
-        }, (item: PlanDay) => `${item.id}-${item.state}`)
+        }, (item: PlanDay) => `${item.dateKey}-${item.state}-${this.calendarExpanded}`)
       }
       .width('100%')
     }
@@ -740,7 +1387,7 @@ export struct PlanContent {
 
       ForEach(this.plans, (item: PlanItem) => {
         this.PlanListRow(item)
-      }, (item: PlanItem) => `${item.id}-${item.progress}`)
+      }, (item: PlanItem) => `${item.id}-${item.progress}-${item.targetDays}-${item.dailyMinutesTarget || 0}-${item.weeklyMinutesTarget || 0}`)
     }
     .width('100%')
     .padding({ left: 22, right: 22, top: 24, bottom: 24 })
@@ -841,6 +1488,7 @@ export struct PlanContent {
           }, (days: number) => `${days}`)
         }
         .width('100%')
+        this.TargetDaysEditor(false)
       }
       .width('100%')
 
@@ -941,36 +1589,53 @@ export struct PlanContent {
         .alignItems(HorizontalAlign.Start)
       }
       .layoutWeight(1)
+      .hitTestBehavior(HitTestMode.Transparent)
       .onClick(() => {
         this.selectedPlanId = item.id;
-        openReader(item.bookId);
+        openReader(item.bookId, item.chapterId || '');
       })
 
-      Text('设置')
-        .fontColor(PLAN_GREEN_DARK)
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .width(56)
-        .height(34)
-        .textAlign(TextAlign.Center)
+      Button('设置')
+          .fontColor(PLAN_GREEN_DARK)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .width(76)
+          .height(44)
+          .padding(0)
         .backgroundColor('#EDF8F1')
-        .borderRadius(17)
-        .onClick(() => this.openPlanSettings(item))
+        .borderRadius(22)
+        .shadow({ radius: 10, color: '#14000000', offsetX: 0, offsetY: 4 })
+        .hitTestBehavior(HitTestMode.Block)
+        .onClick(() => {
+          this.selectedPlanId = item.id;
+          this.openPlanSettings(item);
+        })
     }
     .width('100%')
     .padding({ top: 10, bottom: 10 })
+    .hitTestBehavior(HitTestMode.Block)
   }
 
   @Builder
   PlanSettingsSheet() {
-    Stack() {
+    Stack({ alignContent: Alignment.Center }) {
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor('#66000000')
+        .backgroundColor('#7A0E1720')
+        .opacity(0.42 * this.planSettingsProgress)
+        .hitTestBehavior(HitTestMode.Block)
         .onClick(() => this.closePlanSettings())
+        .zIndex(1)
 
       Column({ space: 16 }) {
+        Column()
+          .width(44)
+          .height(4)
+          .backgroundColor('#DCE2E7')
+          .borderRadius(2)
+          .alignSelf(ItemAlign.Center)
+
         Row() {
           Column({ space: 4 }) {
             Text('阅读设置')
@@ -993,6 +1658,7 @@ export struct PlanContent {
             .textAlign(TextAlign.Center)
             .backgroundColor('#F2F4F6')
             .borderRadius(19)
+            .hitTestBehavior(HitTestMode.Block)
             .onClick(() => this.closePlanSettings())
         }
         .width('100%')
@@ -1009,7 +1675,25 @@ export struct PlanContent {
           .textAlign(TextAlign.Center)
           .backgroundColor('#EDF8F1')
           .borderRadius(19)
+          .hitTestBehavior(HitTestMode.Block)
           .onClick(() => this.syncWeeklyFromDaily())
+
+        Column({ space: 10 }) {
+          Row() {
+            Text('计划周期')
+              .fontColor(PLAN_TEXT)
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+            Blank()
+            Text(`${this.editingTargetDays} 天`)
+              .fontColor(PLAN_GREEN_DARK)
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+          }
+          .width('100%')
+          this.TargetDaysEditor(true)
+        }
+        .width('100%')
 
         if (this.planSettingsError) {
           Text(this.planSettingsError)
@@ -1044,15 +1728,23 @@ export struct PlanContent {
         }
         .width('100%')
       }
-      .width(this.pageWidth >= 720 ? 520 : Math.max(300, this.pageWidth - 32))
+      .width(this.pageWidth >= 720 ? 520 : Math.max(320, this.pageWidth - 32))
       .padding({ left: 20, right: 20, top: 22, bottom: 20 })
       .backgroundColor(Theme.mobileSurface)
-      .borderRadius(22)
-      .shadow({ radius: 24, color: '#33000000', offsetX: 0, offsetY: 12 })
-      .position({ x: this.pageWidth >= 720 ? Math.floor((this.pageWidth - 520) / 2) : 16, y: 86 })
+      .borderRadius(28)
+      .border({ width: 1, color: '#EEF1F5' })
+      .shadow({ radius: 44, color: '#4A000000', offsetX: 0, offsetY: 20 })
+      .opacity(Math.max(0.01, this.planSettingsProgress))
+      .scale({ x: 0.94 + this.planSettingsProgress * 0.06, y: 0.94 + this.planSettingsProgress * 0.06, centerX: '50%', centerY: '50%' })
+      .translate({ x: 0, y: Math.round((1 - this.planSettingsProgress) * 28), z: 0 })
+      .hitTestBehavior(HitTestMode.Default)
+      .zIndex(2)
     }
     .width('100%')
     .height('100%')
+    .position({ x: 0, y: 0 })
+    .hitTestBehavior(HitTestMode.Transparent)
+    .zIndex(99)
   }
 
   @Builder
@@ -1071,15 +1763,16 @@ export struct PlanContent {
       .alignItems(HorizontalAlign.Start)
 
       Row({ space: 8 }) {
-        Text('-')
+        Button('-')
           .fontColor(PLAN_TEXT)
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .width(36)
           .height(36)
-          .textAlign(TextAlign.Center)
           .backgroundColor('#F2F4F6')
           .borderRadius(18)
+          .padding(0)
+          .hitTestBehavior(HitTestMode.Block)
           .onClick(() => minusAction())
         Column({ space: 1 }) {
           Text(`${value}`)
@@ -1096,15 +1789,16 @@ export struct PlanContent {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#F7F9FB')
         .borderRadius(14)
-        Text('+')
+        Button('+')
           .fontColor(PLAN_TEXT)
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .width(36)
           .height(36)
-          .textAlign(TextAlign.Center)
           .backgroundColor('#F2F4F6')
           .borderRadius(18)
+          .padding(0)
+          .hitTestBehavior(HitTestMode.Block)
           .onClick(() => plusAction())
       }
     }
@@ -1112,6 +1806,69 @@ export struct PlanContent {
     .padding({ left: 14, right: 14, top: 14, bottom: 14 })
     .backgroundColor('#F7F9FB')
     .borderRadius(16)
+  }
+
+  @Builder
+  TargetDaysEditor(editing: boolean) {
+    Row({ space: 10 }) {
+      Button('-')
+        .fontColor(PLAN_TEXT)
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .width(38)
+        .height(38)
+        .backgroundColor('#F2F4F6')
+        .borderRadius(19)
+        .padding(0)
+        .hitTestBehavior(HitTestMode.Block)
+        .onClick(() => {
+          if (editing) {
+            this.adjustEditingTargetDays(-1);
+          } else {
+            this.adjustSelectedTargetDays(-1);
+          }
+        })
+      TextInput({
+        placeholder: '天数',
+        text: editing ? `${this.editingTargetDays}` : this.selectedTargetDaysText,
+      })
+        .layoutWeight(1)
+        .height(38)
+        .fontSize(15)
+        .fontColor(PLAN_TEXT)
+        .backgroundColor('#F7F9FB')
+        .borderRadius(14)
+        .textAlign(TextAlign.Center)
+        .onChange((value: string) => {
+          if (editing) {
+            const parsed: number = Number.parseInt(value, 10);
+            if (Number.isFinite(parsed) && parsed > 0) {
+              this.editingTargetDays = this.clampTargetDays(parsed);
+              this.planSettingsError = '';
+            }
+          } else {
+            this.updateSelectedTargetDays(value);
+          }
+        })
+      Button('+')
+        .fontColor(PLAN_TEXT)
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .width(38)
+        .height(38)
+        .backgroundColor('#F2F4F6')
+        .borderRadius(19)
+        .padding(0)
+        .hitTestBehavior(HitTestMode.Block)
+        .onClick(() => {
+          if (editing) {
+            this.adjustEditingTargetDays(1);
+          } else {
+            this.adjustSelectedTargetDays(1);
+          }
+        })
+    }
+    .width('100%')
   }
 
   @Builder
@@ -1167,7 +1924,7 @@ export struct PlanContent {
         .fontColor(PLAN_TEXT)
         .fontSize(16)
     }
-    .layoutWeight(1)
+    .width('14.28%')
     .alignItems(HorizontalAlign.Center)
   }
 
@@ -1184,6 +1941,7 @@ export struct PlanContent {
         .height(heightValue)
         .backgroundColor(PLAN_GREEN)
         .borderRadius(heightValue)
+        .animation({ duration: 220, curve: Curve.EaseOut })
     }
     .width(widthValue)
     .height(heightValue)

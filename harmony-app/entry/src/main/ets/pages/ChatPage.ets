@@ -1,5 +1,6 @@
-import { ApiClient, ChatResult } from '../common/ApiClient';
+import { ApiClient, ChatResult, ToolTrace } from '../common/ApiClient';
 import { AnalyticsEvent, AnalyticsEventExtra, Book, SourceRef, emptyBook } from '../common/Models';
+import { AiResponseView } from '../common/AiResponseView';
 import { BookCover } from '../common/BookCover';
 import { currentBookId, goBack, openReader } from '../common/Navigation';
 import { Theme } from '../common/Theme';
@@ -12,9 +13,13 @@ struct ChatPage {
   @State book: Book = emptyBook();
   @State question: string = '这本书适合我从哪一章开始读？';
   @State answer: string = '';
+  @State reasoning: string = '';
   @State followUpSuggestion: string = '';
   @State sources: SourceRef[] = [];
+  @State toolTrace: ToolTrace[] = [];
+  @State statusText: string = '';
   @State busyText: string = '';
+  @State askBusy: boolean = false;
   @State errorText: string = '';
 
   aboutToAppear(): void {
@@ -34,23 +39,65 @@ struct ChatPage {
     }
   }
 
+  waitForThinkingFrame(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resolve();
+      }, 650);
+    });
+  }
+
   async askBook(): Promise<void> {
     const userId: number = UserSession.currentUserId();
     if (userId <= 0) {
       this.errorText = '请先在“我的”页面登录后再使用 AI 伴读。';
       return;
     }
-    this.busyText = 'AI 伴读正在检索来源片段';
+    if (this.askBusy) {
+      return;
+    }
+    this.askBusy = true;
+    this.busyText = '正在思考';
     this.errorText = '';
     this.answer = '';
+    this.reasoning = '';
+    this.followUpSuggestion = '';
+    this.sources = [];
+    this.toolTrace = [];
+    this.statusText = '正在思考';
     try {
-      const result: ChatResult = await ApiClient.chat(userId, this.bookId, this.question);
-      this.answer = result.answer || '';
+      await this.waitForThinkingFrame();
+      const result: ChatResult = await ApiClient.chatStream(userId, this.bookId, this.question, {
+        chapterId: '',
+        paragraph: '',
+        allowExternalSearch: true,
+        tone: 'warm_companion',
+      }, {
+        onDelta: (text: string) => {
+          this.answer += text;
+        },
+        onReasoning: (text: string) => {
+          this.reasoning += text;
+        },
+        onStatus: (text: string) => {
+          this.statusText = text;
+        },
+        onResult: (value: ChatResult) => {
+          this.answer = ApiClient.preferStreamText(this.answer, value.answer || '');
+          this.sources = value.sources || [];
+          this.followUpSuggestion = value.follow_up_suggestion || '';
+          this.toolTrace = value.tool_trace || [];
+          this.reasoning = value.hidden_reasoning || value.reasoning_content || value.reasoning || this.reasoning;
+        },
+        onError: (message: string) => {
+          this.statusText = message;
+        },
+      });
+      this.answer = ApiClient.preferStreamText(this.answer, result.answer || '');
       this.sources = result.sources || [];
       this.followUpSuggestion = result.follow_up_suggestion || '';
-      if (result.llm_status === 'recovered') {
-        this.followUpSuggestion = this.followUpSuggestion || '可以继续追问某一章、某个概念，或让我把这段整理成笔记。';
-      }
+      this.toolTrace = result.tool_trace || [];
+      this.reasoning = result.hidden_reasoning || result.reasoning_content || result.reasoning || this.reasoning;
       try {
         const extra: AnalyticsEventExtra = { sourceCount: this.sources.length };
         const event: AnalyticsEvent = {
@@ -65,7 +112,9 @@ struct ChatPage {
     } catch (err) {
       this.errorText = `伴读失败：${err}`;
     } finally {
+      this.askBusy = false;
       this.busyText = '';
+      this.statusText = '';
     }
   }
 
@@ -102,8 +151,26 @@ struct ChatPage {
           }
           this.BookPanel()
           this.QuestionPanel()
-          this.AnswerPanel()
-          this.SourcePanel()
+          AiResponseView({
+            answer: this.answer,
+            reasoning: this.reasoning,
+            followUpSuggestion: this.followUpSuggestion,
+            sources: this.sources,
+            toolTrace: this.toolTrace,
+            busy: this.askBusy,
+            statusText: this.statusText,
+            emptyText: '可以直接问“这章怎么读”“这个概念什么意思”，也可以把卡住的一句话贴过来。',
+            dark: true,
+            compact: false,
+            maxAnswerLines: 0,
+          })
+          Button('保存为笔记')
+            .height(42)
+            .fontColor(Theme.primary)
+            .backgroundColor(Theme.onDark)
+            .borderRadius(Theme.radius.pill)
+            .enabled(!!this.answer)
+            .onClick(() => this.saveNote())
         }
         .width('100%')
         .padding({ left: 20, right: 20, bottom: 32 })
@@ -162,7 +229,7 @@ struct ChatPage {
         Text(this.book.author)
           .fontColor(Theme.onDarkSoft)
           .fontSize(13)
-        Text('回答必须来自当前图书、用户画像和检索来源片段。资料不足时要明确提示。')
+        Text('问章节、概念、读法都可以，我会尽量贴着这本书讲。')
           .fontColor(Theme.onDarkSoft)
           .fontSize(12)
           .lineHeight(18)
@@ -189,77 +256,39 @@ struct ChatPage {
         .onChange((value: string) => {
           this.question = value;
         })
-      Button('提问')
-        .width('100%')
-        .height(44)
-        .fontColor(Theme.primary)
-        .backgroundColor(Theme.onDark)
-        .borderRadius(Theme.radius.pill)
-        .onClick(() => this.askBook())
-    }
-    .width('100%')
-  }
-
-  @Builder
-  AnswerPanel() {
-    if (this.answer) {
-      Column({ space: 12 }) {
-        Text(this.answer)
-          .fontColor(Theme.onDark)
-          .fontSize(15)
-          .lineHeight(24)
-        if (this.followUpSuggestion) {
-          Text(`下一步：${this.followUpSuggestion}`)
-            .fontColor(Theme.coralSoft)
-            .fontSize(13)
-            .lineHeight(20)
-        }
-        Button('保存为笔记')
-          .height(42)
+        .onSubmit(() => {
+          if (!this.askBusy) {
+            this.askBook();
+          }
+        })
+      Stack({ alignContent: Alignment.Center }) {
+        Button(this.askBusy ? '' : '提问')
+          .width('100%')
+          .height(44)
           .fontColor(Theme.primary)
           .backgroundColor(Theme.onDark)
           .borderRadius(Theme.radius.pill)
-          .onClick(() => this.saveNote())
-      }
-      .width('100%')
-      .padding(18)
-      .backgroundColor('#0D2233')
-      .borderRadius(Theme.radius.lg)
-    } else {
-      Text('提出问题后，AI 会返回回答与可追溯来源。资料不足时应提示补充关键词，而不是编造内容。')
-        .fontColor(Theme.onDarkSoft)
-        .fontSize(14)
-        .lineHeight(22)
-        .padding(18)
-        .backgroundColor('#0D2233')
-        .borderRadius(Theme.radius.lg)
-        .width('100%')
-    }
-  }
+          .enabled(!this.askBusy)
+          .onClick(() => this.askBook())
 
-  @Builder
-  SourcePanel() {
-    if (this.sources.length > 0) {
-      Column({ space: 8 }) {
-        Text('参考依据')
-          .fontColor(Theme.onDark)
-          .fontSize(18)
-          .fontWeight(FontWeight.Regular)
-        ForEach(this.sources.slice(0, 4), (source: SourceRef) => {
-          Text(`${source.title} · ${source.source}\n${source.text}`)
-            .fontColor(Theme.onDarkSoft)
-            .fontSize(12)
-            .lineHeight(18)
-            .padding(12)
-            .backgroundColor('#13283A')
-            .borderRadius(Theme.radius.sm)
-        }, (source: SourceRef) => `${source.chunk_id}`)
+        if (this.askBusy) {
+          Row({ space: 8 }) {
+            LoadingProgress()
+              .width(14)
+              .height(14)
+              .color(Theme.primary)
+            Text('思考中')
+              .fontColor(Theme.primary)
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+          }
+          .hitTestBehavior(HitTestMode.None)
+        }
       }
       .width('100%')
-      .padding(18)
-      .backgroundColor('#0D2233')
-      .borderRadius(Theme.radius.lg)
+      .height(44)
     }
+    .width('100%')
   }
 
   @Builder

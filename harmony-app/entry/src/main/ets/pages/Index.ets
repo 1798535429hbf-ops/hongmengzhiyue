@@ -1,25 +1,49 @@
 import { ShelfHomePanel } from '../common/ShelfHomePanel';
+import { APP_DARK_MODE_KEY, APP_FONT_FAMILY_KEY, AppSettings } from '../common/AppSettings';
 import { Theme } from '../common/Theme';
 import { StoreContent } from './StoreContent';
 import { CategoryContent } from './CategoryContent';
 import { PlanContent } from './PlanContent';
 import { ProfileContent } from './ProfileContent';
 import { UserSession } from '../common/UserSession';
+import { PLAN_DATA_REFRESH_KEY } from '../common/Navigation';
 import { common } from '@kit.AbilityKit';
+import { SplashScreen } from '../common/SplashScreen';
+import { setCurrentWindowSplashMode } from '../common/WindowMode';
 
 @Entry
 @Component
 struct Index {
   @StorageLink('smartread_active_tab') activeTab: number = 0;
   @State pageWidth: number = 390;
+  @State pageHeight: number = 780;
+  @State showLaunchSplash: boolean = true;
   @State shelfRefreshSeed: number = 0;
   @State planRefreshSeed: number = 0;
+  @State pageScrollOffset: number = 0;
   @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
+  @StorageLink(PLAN_DATA_REFRESH_KEY) @Watch('onPlanDataRefreshSignalChange') planDataRefreshSignal: number = 0;
+  @StorageLink(APP_DARK_MODE_KEY) darkMode: boolean = false;
+  @StorageLink(APP_FONT_FAMILY_KEY) fontFamily: string = 'system';
+  private mainScroller: Scroller = new Scroller();
+  private launchSplashTimer: number = -1;
+  private launchSplashDuration: number = 1200;
 
   aboutToAppear(): void {
+    AppSettings.ensureDefaults();
+    this.enterLaunchSplashMode();
+    this.scheduleLaunchSplashExit();
+    this.bootstrapAppSettings();
     this.bootstrapSession();
     this.shelfRefreshSeed++;
     this.planRefreshSeed++;
+  }
+
+  aboutToDisappear(): void {
+    this.clearLaunchSplashTimer();
+    if (this.showLaunchSplash) {
+      this.finishLaunchSplash();
+    }
   }
 
   onPageShow(): void {
@@ -37,9 +61,58 @@ struct Index {
       return;
     }
     await UserSession.bootstrap(context);
+    this.shelfRefreshSeed++;
+    this.planRefreshSeed++;
+  }
+
+  async bootstrapAppSettings(): Promise<void> {
+    const context = this.hostContext();
+    if (!context) {
+      return;
+    }
+    await AppSettings.bootstrap(context);
+  }
+
+  async enterLaunchSplashMode(): Promise<void> {
+    const context = this.hostContext();
+    if (!context) {
+      return;
+    }
+    await setCurrentWindowSplashMode(context, true);
+  }
+
+  scheduleLaunchSplashExit(): void {
+    this.clearLaunchSplashTimer();
+    this.launchSplashTimer = setTimeout(() => {
+      this.finishLaunchSplash();
+    }, this.launchSplashDuration);
+  }
+
+  clearLaunchSplashTimer(): void {
+    if (this.launchSplashTimer >= 0) {
+      clearTimeout(this.launchSplashTimer);
+      this.launchSplashTimer = -1;
+    }
+  }
+
+  async finishLaunchSplash(): Promise<void> {
+    if (!this.showLaunchSplash) {
+      return;
+    }
+    this.clearLaunchSplashTimer();
+    const context = this.hostContext();
+    if (context) {
+      await setCurrentWindowSplashMode(context, false);
+    }
+    this.showLaunchSplash = false;
   }
 
   onSessionUserChange(): void {
+    this.shelfRefreshSeed++;
+    this.planRefreshSeed++;
+  }
+
+  onPlanDataRefreshSignalChange(): void {
     this.shelfRefreshSeed++;
     this.planRefreshSeed++;
   }
@@ -131,14 +204,45 @@ struct Index {
     return active ? $r('app.media.mobile_tab_me_active') : $r('app.media.mobile_tab_me');
   }
 
+  pageBg(): string {
+    return this.darkMode ? '#0F1218' : Theme.mobileCanvas;
+  }
+
+  tabBg(): string {
+    return this.darkMode ? '#171B24' : Theme.mobileSurface;
+  }
+
+  tabBorder(): string {
+    return this.darkMode ? '#293040' : '#EFF1F5';
+  }
+
+  tabInactiveColor(): string {
+    return this.darkMode ? '#8E97AA' : '#9197AA';
+  }
+
+  appFont(): string {
+    return AppSettings.fontFamilyValue(this.fontFamily);
+  }
+
+  resetMainScroll(): void {
+    this.pageScrollOffset = 0;
+    try {
+      this.mainScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: false });
+    } catch (_) {
+    }
+  }
+
   build() {
-    Column() {
-      Scroll() {
-        Column() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column() {
+        if (this.activeTab === 3) {
           Column() {
             this.ActivePage()
           }
           .width('100%')
+          .height('100%')
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Center)
           .constraintSize({ maxWidth: this.contentMaxWidth() })
           .padding({
             left: this.pagePadding(),
@@ -146,21 +250,53 @@ struct Index {
             top: this.pageTopPadding(),
             bottom: this.pageBottomPadding(),
           })
+        } else {
+          Scroll(this.mainScroller) {
+            Column() {
+              Column() {
+                this.ActivePage()
+              }
+              .width('100%')
+              .constraintSize({ maxWidth: this.contentMaxWidth() })
+              .padding({
+                left: this.pagePadding(),
+                right: this.pagePadding(),
+                top: this.pageTopPadding(),
+                bottom: this.pageBottomPadding(),
+              })
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Center)
+          }
+          .layoutWeight(1)
+          .onScroll((_xOffset: number, yOffset: number) => {
+            this.pageScrollOffset = Math.max(0, Math.round(yOffset || 0));
+          })
         }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-      }
-      .layoutWeight(1)
 
-      this.BottomTabs()
+        this.BottomTabs()
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(this.pageBg())
+      .animation({ duration: 320, curve: Curve.EaseInOut })
+
+      if (this.showLaunchSplash) {
+        SplashScreen({ pageWidth: this.pageWidth, pageHeight: this.pageHeight })
+          .zIndex(10)
+      }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.mobileCanvas)
-    .onAreaChange((_, area) => {
+    .backgroundColor(this.pageBg())
+    .onAreaChange((_: Area, area: Area) => {
       const nextWidth: number = typeof area.width === 'number' ? area.width : Number(area.width);
       if (Number.isFinite(nextWidth) && nextWidth > 0) {
         this.pageWidth = nextWidth;
+      }
+      const nextHeight: number = typeof area.height === 'number' ? area.height : Number(area.height);
+      if (Number.isFinite(nextHeight) && nextHeight > 0) {
+        this.pageHeight = nextHeight;
       }
     })
   }
@@ -177,7 +313,10 @@ struct Index {
     } else if (this.activeTab === 2) {
       CategoryContent({ pageWidth: this.pageWidth })
     } else if (this.activeTab === 3) {
-      PlanContent({ pageWidth: this.pageWidth, refreshSeed: this.planRefreshSeed })
+      PlanContent({
+        pageWidth: this.pageWidth,
+        refreshSeed: this.planRefreshSeed,
+      })
     } else {
       ProfileContent({ pageWidth: this.pageWidth })
     }
@@ -199,8 +338,8 @@ struct Index {
       top: 10,
       bottom: this.isCompact() ? 10 : 14,
     })
-    .backgroundColor(Theme.mobileSurface)
-    .border({ width: 1, color: '#EFF1F5' })
+    .backgroundColor(this.tabBg())
+    .border({ width: 1, color: this.tabBorder() })
   }
 
   @Builder
@@ -210,7 +349,7 @@ struct Index {
         .width(26)
         .height(26)
       Text(label)
-        .fontColor(this.activeTab === index ? this.tabAccent(index) : '#9197AA')
+        .fontColor(this.activeTab === index ? this.tabAccent(index) : this.tabInactiveColor())
         .fontSize(12)
         .fontWeight(this.activeTab === index ? FontWeight.Medium : FontWeight.Regular)
     }
@@ -219,6 +358,9 @@ struct Index {
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {
+      if (this.activeTab !== index) {
+        this.resetMainScroll();
+      }
       this.activeTab = index;
       if (index === 0) {
         this.shelfRefreshSeed++;

@@ -219,6 +219,10 @@ function localContinueItem(storeState: ShelfStoreState, item: LocalShelfBook): S
 function remotePlanItem(storeState: ShelfStoreState, plan: PlanItem, session: RemoteShelfSession | null): ShelfCardItem {
   const seed: string = `${plan.title}-${plan.author}`;
   const updatedAt: string = session ? session.updatedAt : `1970-01-01T00:${`${plan.id % 60}`.padStart(2, '0')}:00.000Z`;
+  const progress: number = Math.max(
+    Math.max(0, Math.min(100, Math.round(plan.progress || 0))),
+    session ? Math.max(0, Math.min(100, Math.round(session.progress || 0))) : 0
+  );
   const downloadTarget: ShelfDownloadTarget = {
     sourceType: 'remote',
     remoteBookId: plan.bookId,
@@ -229,15 +233,15 @@ function remotePlanItem(storeState: ShelfStoreState, plan: PlanItem, session: Re
     title: plan.title,
     author: plan.author,
     tag: pickedTag(session ? session.tags : '', '在读'),
-    progress: session ? session.progress : plan.progress,
-    progressText: `${session ? session.progress : plan.progress}%`,
+    progress,
+    progressText: `${progress}%`,
     accent: accentBySeed(seed),
-    lastRead: session && session.chapterTitle ? `上次阅读：${session.chapterTitle}` : `当前进度：${plan.progress}%`,
+    lastRead: session && session.chapterTitle ? `上次阅读：${session.chapterTitle}` : `当前进度：${progress}%`,
     coverTone: session && session.coverColor ? session.coverColor : (plan.coverColor || toneBySeed(seed)),
     updatedAt,
     actionLabel: '继续阅读',
     remoteBookId: plan.bookId,
-    chapterId: session ? session.chapterId : '',
+    chapterId: session && session.chapterId ? session.chapterId : (plan.chapterId || ''),
     inShelf: true,
     downloaded: isDownloaded(storeState, downloadTarget),
     pinned: isPinned(storeState, session ? session.key : `remote:${plan.bookId}`),

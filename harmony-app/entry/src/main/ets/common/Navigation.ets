@@ -2,6 +2,38 @@ import router from '@ohos.router';
 
 export const ACTIVE_TAB_KEY: string = 'smartread_active_tab';
 export const STORE_TAB_INDEX: number = 1;
+export const PLAN_DATA_REFRESH_KEY: string = 'smartread_plan_data_refresh_seed';
+export const PLAN_PROGRESS_BOOK_ID_KEY: string = 'smartread_plan_progress_book_id';
+export const PLAN_PROGRESS_VALUE_KEY: string = 'smartread_plan_progress_value';
+export const PLAN_PROGRESS_CHAPTER_ID_KEY: string = 'smartread_plan_progress_chapter_id';
+export const PLAN_PROGRESS_SCROLL_OFFSET_KEY: string = 'smartread_plan_progress_scroll_offset';
+export const PLAN_PROGRESS_STATUS_KEY: string = 'smartread_plan_progress_status';
+export const PLAN_PROGRESS_UPDATED_AT_KEY: string = 'smartread_plan_progress_updated_at';
+
+export function notifyPlanDataChanged(): void {
+  const current = AppStorage.get<number>(PLAN_DATA_REFRESH_KEY);
+  AppStorage.setOrCreate(PLAN_DATA_REFRESH_KEY, (typeof current === 'number' ? current : 0) + 1);
+}
+
+export function notifyPlanProgressChanged(
+  bookId: number,
+  progress: number,
+  chapterId: string = '',
+  scrollOffset: number = 0,
+  status: string = ''
+): void {
+  if (bookId <= 0) {
+    return;
+  }
+  const safeProgress: number = Math.max(0, Math.min(100, Math.round(progress || 0)));
+  AppStorage.setOrCreate(PLAN_PROGRESS_BOOK_ID_KEY, bookId);
+  AppStorage.setOrCreate(PLAN_PROGRESS_VALUE_KEY, safeProgress);
+  AppStorage.setOrCreate(PLAN_PROGRESS_CHAPTER_ID_KEY, chapterId || '');
+  AppStorage.setOrCreate(PLAN_PROGRESS_SCROLL_OFFSET_KEY, Math.max(0, Math.round(scrollOffset || 0)));
+  AppStorage.setOrCreate(PLAN_PROGRESS_STATUS_KEY, status || (safeProgress >= 100 ? 'finished' : 'reading'));
+  AppStorage.setOrCreate(PLAN_PROGRESS_UPDATED_AT_KEY, new Date().toISOString());
+  notifyPlanDataChanged();
+}
 
 function toNumber(value: Object | undefined, fallback: number = 0): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -93,6 +125,24 @@ export function openLogin(): void {
 export function openProfileEdit(): void {
   router.pushUrl({
     url: 'pages/ProfileEditPage',
+  });
+}
+
+export function openAccountSecurity(): void {
+  router.pushUrl({
+    url: 'pages/AccountSecurityPage',
+  });
+}
+
+export function openPreferenceSettings(): void {
+  router.pushUrl({
+    url: 'pages/PreferenceSettingsPage',
+  });
+}
+
+export function openGeneralSettings(): void {
+  router.pushUrl({
+    url: 'pages/GeneralSettingsPage',
   });
 }
 

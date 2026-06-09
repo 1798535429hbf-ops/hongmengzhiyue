@@ -1,8 +1,10 @@
 import { ApiClient } from '../common/ApiClient';
+import { APP_DARK_MODE_KEY, APP_FONT_FAMILY_KEY, AppSettings } from '../common/AppSettings';
 import { Book, ChatRecord, NoteItem, PlanItem, UserProfile, emptyProfile } from '../common/Models';
-import { openLogin, openProfileEdit, openSettings } from '../common/Navigation';
+import { openAccountSecurity, openLogin, openSettings } from '../common/Navigation';
 import { Theme } from '../common/Theme';
 import { UserSession } from '../common/UserSession';
+import { common } from '@kit.AbilityKit';
 
 interface ProfileMenuItem {
   title: string;
@@ -15,6 +17,8 @@ export struct ProfileContent {
   @Prop pageWidth: number = 390;
   @StorageLink('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
   @StorageLink('smartread_session_user_name') sessionUserName: string = '';
+  @StorageLink(APP_DARK_MODE_KEY) darkMode: boolean = false;
+  @StorageLink(APP_FONT_FAMILY_KEY) fontFamily: string = 'system';
 
   @State profile: UserProfile = emptyProfile();
   @State favorites: Book[] = [];
@@ -28,6 +32,10 @@ export struct ProfileContent {
 
   aboutToAppear(): void {
     this.loadDashboard();
+  }
+
+  hostContext(): common.UIAbilityContext | undefined {
+    return getContext(this) as common.UIAbilityContext | undefined;
   }
 
   onPageShow(): void {
@@ -48,6 +56,34 @@ export struct ProfileContent {
 
   pageGap(): number {
     return this.isCompact() ? 14 : 18;
+  }
+
+  surface(): string {
+    return this.darkMode ? '#171B24' : '#FFFFFF';
+  }
+
+  avatarBg(): string {
+    return this.darkMode ? '#222938' : '#F3F5F8';
+  }
+
+  textColor(): string {
+    return this.darkMode ? '#EEF2F8' : '#1F2430';
+  }
+
+  bodyColor(): string {
+    return this.darkMode ? '#C6CCDA' : '#30333B';
+  }
+
+  subtextColor(): string {
+    return this.darkMode ? '#9BA3B4' : '#9AA0AE';
+  }
+
+  lineColor(): string {
+    return this.darkMode ? '#293040' : '#EEF0F4';
+  }
+
+  appFont(): string {
+    return AppSettings.fontFamilyValue(this.fontFamily);
   }
 
   displayName(): string {
@@ -128,10 +164,18 @@ export struct ProfileContent {
 
   handleAccountTap(): void {
     if (this.loggedIn()) {
-      openProfileEdit();
+      openAccountSecurity();
     } else {
       openLogin();
     }
+  }
+
+  async toggleDarkMode(): Promise<void> {
+    const next = !this.darkMode;
+    animateTo({ duration: 320, curve: Curve.EaseInOut }, () => {
+      this.darkMode = next;
+    });
+    await AppSettings.setDarkMode(this.hostContext(), next);
   }
 
   handleMenu(action: string): void {
@@ -160,6 +204,7 @@ export struct ProfileContent {
         this.MenuCard()
       }
       .width('100%')
+      .animation({ duration: 320, curve: Curve.EaseInOut })
 
       if (this.showToast) {
         Stack({ alignContent: Alignment.Center }) {
@@ -188,9 +233,35 @@ export struct ProfileContent {
         .onClick(() => openSettings())
 
       Blank()
+
+      this.DarkModeButton()
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  DarkModeButton() {
+    Row({ space: 6 }) {
+      Text(this.darkMode ? '日' : '夜')
+        .fontColor(this.darkMode ? '#FFDFA3' : '#4A5060')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .width(26)
+        .height(26)
+        .textAlign(TextAlign.Center)
+        .backgroundColor(this.darkMode ? '#332818' : '#F4F5F7')
+        .borderRadius(13)
+      Text(this.darkMode ? '护眼' : '夜间')
+        .fontColor(this.subtextColor())
+        .fontSize(13)
+    }
+    .height(34)
+    .padding({ left: 6, right: 10 })
+    .backgroundColor(this.surface())
+    .border({ width: 1, color: this.lineColor() })
+    .borderRadius(17)
+    .onClick(() => { this.toggleDarkMode(); })
   }
 
   @Builder
@@ -200,13 +271,13 @@ export struct ProfileContent {
         .width(size)
         .height(size)
         .borderRadius(size / 2)
-        .backgroundColor('#F3F5F8')
+        .backgroundColor(this.avatarBg())
     } else {
       Image($r('app.media.profile_avatar'))
         .width(size)
         .height(size)
         .borderRadius(size / 2)
-        .backgroundColor('#F3F5F8')
+        .backgroundColor(this.avatarBg())
     }
   }
 
@@ -217,13 +288,13 @@ export struct ProfileContent {
 
       Column({ space: 7 }) {
         Text(this.displayName())
-          .fontColor('#1F2430')
+          .fontColor(this.textColor())
           .fontSize(this.isCompact() ? 28 : 32)
           .fontWeight(FontWeight.Medium)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text(this.displaySubtitle())
-          .fontColor('#9AA0AE')
+          .fontColor(this.subtextColor())
           .fontSize(this.isCompact() ? 14 : 16)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -232,7 +303,7 @@ export struct ProfileContent {
       .alignItems(HorizontalAlign.Start)
 
       Text('›')
-        .fontColor('#C7CAD1')
+        .fontColor(this.subtextColor())
         .fontSize(42)
         .fontWeight(FontWeight.Medium)
         .width(34)
@@ -253,7 +324,7 @@ export struct ProfileContent {
           if (index < this.menuItems().length - 1) {
             Divider()
               .height(0.5)
-              .color('#EEF0F4')
+              .color(this.lineColor())
               .margin({ left: 8 })
           }
         }
@@ -262,7 +333,7 @@ export struct ProfileContent {
     }
     .width('100%')
     .padding({ left: 22, right: 18 })
-    .backgroundColor('#FFFFFF')
+    .backgroundColor(this.surface())
     .borderRadius(18)
   }
 
@@ -270,16 +341,16 @@ export struct ProfileContent {
   MenuRow(item: ProfileMenuItem) {
     Row({ space: 12 }) {
       Text(item.title)
-        .fontColor('#30333B')
+        .fontColor(this.bodyColor())
         .fontSize(this.isCompact() ? 20 : 22)
         .layoutWeight(1)
       if (this.loggedIn()) {
         Text(`${item.count}`)
-          .fontColor('#9AA0AE')
+          .fontColor(this.subtextColor())
           .fontSize(15)
       }
       Text('›')
-        .fontColor('#D0D3DA')
+        .fontColor(this.subtextColor())
         .fontSize(28)
     }
     .width('100%')

@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS `user` (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  email VARCHAR(160) NOT NULL DEFAULT '',
   account VARCHAR(80) NOT NULL COMMENT '登录账号，当前阶段默认等于手机号',
   phone VARCHAR(32) NOT NULL COMMENT '手机号',
   password_hash VARCHAR(128) NOT NULL DEFAULT '' COMMENT '密码哈希',
@@ -16,7 +17,8 @@ CREATE TABLE IF NOT EXISTS `user` (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uk_user_account (account),
-  UNIQUE KEY uk_user_phone (phone)
+  UNIQUE KEY uk_user_phone (phone),
+  KEY idx_user_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS user_auth (
@@ -149,6 +151,36 @@ CREATE TABLE IF NOT EXISTS note (
   content TEXT NOT NULL,
   type VARCHAR(32) NOT NULL DEFAULT 'ai_answer',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS reader_highlight (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  book_id BIGINT NOT NULL,
+  chapter_id VARCHAR(64) NOT NULL,
+  paragraph_index INT NOT NULL DEFAULT 0,
+  start_offset INT NOT NULL DEFAULT 0,
+  end_offset INT NOT NULL DEFAULT 0,
+  selected_text TEXT NOT NULL,
+  book_title VARCHAR(255) NOT NULL DEFAULT '',
+  chapter_title VARCHAR(255) NOT NULL DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_reader_highlight_scope (user_id, book_id, chapter_id, paragraph_index),
+  KEY idx_reader_highlight_chapter (book_id, chapter_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS reader_comment (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  book_id BIGINT NOT NULL,
+  chapter_id VARCHAR(64) NOT NULL,
+  paragraph_index INT NOT NULL DEFAULT 0,
+  selected_text TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_reader_comment_scope (book_id, chapter_id, paragraph_index, created_at),
+  KEY idx_reader_comment_user_time (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS commerce_result (

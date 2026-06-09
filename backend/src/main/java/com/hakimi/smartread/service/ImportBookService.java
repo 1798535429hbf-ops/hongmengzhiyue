@@ -82,7 +82,7 @@ public class ImportBookService {
             throw SmartReadException.badRequest("TXT/MD 内容为空，无法导入");
         }
         String title = titleFromText(fileName, text);
-        List<TextSection> sections = splitTextSections(title, text);
+        List<TextSection> sections = readableSections(splitTextSections(title, text));
         List<Map<String, Object>> chapters = new ArrayList<>();
         List<Map<String, Object>> chunks = new ArrayList<>();
         for (int i = 0; i < sections.size() && i < MAX_CHAPTERS; i++) {
@@ -136,6 +136,9 @@ public class ImportBookService {
                 continue;
             }
             String chapterTitle = heading(html);
+            if (isFrontMatterSection(chapterTitle, plain)) {
+                continue;
+            }
             if (chapterTitle.isBlank()) {
                 chapterTitle = "第" + order + "章";
             }
@@ -272,6 +275,64 @@ public class ImportBookService {
             }
         }
         return sections;
+    }
+
+    private List<TextSection> readableSections(List<TextSection> sections) {
+        List<TextSection> filtered = new ArrayList<>();
+        for (TextSection section : sections) {
+            if (!isFrontMatterSection(section.title(), section.content())) {
+                filtered.add(section);
+            }
+        }
+        return filtered.isEmpty() ? sections : filtered;
+    }
+
+    private boolean isFrontMatterSection(String title, String content) {
+        String cleanTitle = compact(title).toLowerCase(Locale.ROOT);
+        String sample = compact((title == null ? "" : title) + "\n"
+                + (content == null ? "" : content.substring(0, Math.min(content.length(), 2400)))).toLowerCase(Locale.ROOT);
+        if (cleanTitle.matches("(cover|titlepage|contents|tableofcontents|copyright|toc|nav)")
+                || cleanTitle.matches("(\u5c01\u9762|\u4e66\u540d\u9875|\u6249\u9875|\u76ee\u5f55|\u76ee\u9304|\u76ee\u6b21|\u7248\u6743|\u7248\u6743\u9875|\u7248\u6743\u4fe1\u606f|\u5236\u4f5c\u4fe1\u606f)")) {
+            return true;
+        }
+        if (sample.startsWith("copyright") || sample.startsWith("\u7248\u6743") || sample.startsWith("\u51fa\u7248\u8bf4\u660e")) {
+            return true;
+        }
+        if (sample.startsWith("contents") || sample.startsWith("tableofcontents")
+                || sample.startsWith("\u76ee\u5f55") || sample.startsWith("\u76ee\u9304") || sample.startsWith("\u76ee\u6b21")) {
+            return true;
+        }
+        return looksLikeCatalog(content);
+    }
+
+    private boolean looksLikeCatalog(String content) {
+        if (content == null || content.isBlank()) {
+            return false;
+        }
+        String[] lines = normalizeWhitespace(content).split("\\n");
+        int catalogLines = 0;
+        int readableLines = 0;
+        Pattern chapterRef = Pattern.compile("^(?:\u7b2c[\u4e00-\u9fa5\\d]+[\u7ae0\u8282\u56de\u90e8\u5377\u7bc7]|chapter\\s*\\d+|\\d+[.、]\\s*).*$",
+                Pattern.CASE_INSENSITIVE);
+        for (String rawLine : lines) {
+            String line = rawLine.trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            readableLines++;
+            if (line.length() <= 120 && (chapterRef.matcher(line).matches()
+                    || line.matches(".*[.。·\\s]{2,}\\d{1,4}$"))) {
+                catalogLines++;
+            }
+            if (readableLines >= 24) {
+                break;
+            }
+        }
+        return catalogLines >= 3 && catalogLines * 2 >= Math.max(1, readableLines);
+    }
+
+    private String compact(String value) {
+        return value == null ? "" : value.replaceAll("[\\s\\p{Punct}\u3000-\u303f]+", "").trim();
     }
 
     private List<String> paragraphs(String content) {

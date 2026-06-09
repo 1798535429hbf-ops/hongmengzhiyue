@@ -28,6 +28,11 @@ public class BookController {
         return ApiResponse.ok(repository.searchBooks(keyword, tag, page, size));
     }
 
+    @GetMapping("/tags")
+    public ApiResponse<Map<String, Object>> tags() {
+        return ApiResponse.ok(repository.listBookTags());
+    }
+
     @GetMapping("/store")
     public ApiResponse<List<Map<String, Object>>> store(@RequestParam(defaultValue = "featured") String section,
                                                         @RequestParam(defaultValue = "10086") long userId,

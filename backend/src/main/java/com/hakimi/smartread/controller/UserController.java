@@ -48,10 +48,11 @@ public class UserController {
         String name = Payloads.text(payload, "name", "智阅同学");
         String nickname = Payloads.text(payload, "nickname", name);
         String avatarUrl = Payloads.text(payload, "avatarUrl", Payloads.text(payload, "avatar_url", ""));
-        return ApiResponse.ok(repository.upsertProfile(
+        return ApiResponse.ok(repository.upsertProfileWithEmail(
                 userId,
                 name,
                 nickname,
+                Payloads.text(payload, "email", ""),
                 Payloads.text(payload, "major", ""),
                 Payloads.text(payload, "grade", ""),
                 Payloads.text(payload, "interests", ""),
@@ -110,5 +111,25 @@ public class UserController {
     @PostMapping("/provider-login")
     public ApiResponse<Map<String, Object>> providerLogin(@RequestBody Map<String, Object> payload) {
         return ApiResponse.ok(service.providerLogin(payload));
+    }
+
+    @PostMapping("/email/bind")
+    public ApiResponse<Map<String, Object>> bindEmail(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.bindEmail(payload));
+    }
+
+    @PostMapping("/password/change")
+    public ApiResponse<Map<String, Object>> changePassword(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.changePassword(payload));
+    }
+
+    @PostMapping("/password/reset")
+    public ApiResponse<Map<String, Object>> resetPassword(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.resetPassword(payload));
+    }
+
+    @PostMapping("/account/delete")
+    public ApiResponse<Map<String, Object>> deleteAccount(@RequestBody Map<String, Object> payload) {
+        return ApiResponse.ok(service.deleteAccount(payload));
     }
 }

@@ -128,6 +128,7 @@ export class UserSession {
       id: userId,
       account: profile.account || String(userId),
       phone: profile.phone || String(userId),
+      email: profile.email || '',
       name: profile.name || `智阅同学 ${userId}`,
       nickname: profile.nickname || profile.name || `智阅同学 ${userId}`,
       major: profile.major || '待完善专业',
