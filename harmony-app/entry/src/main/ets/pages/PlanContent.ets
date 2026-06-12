@@ -182,12 +182,50 @@ export struct PlanContent {
   }
 
   completedDays(): number {
-    const plan = this.currentPlan();
+    return this.completedDaysForPlan(this.currentPlan());
+  }
+
+  completedDaysForPlan(plan: PlanItem | null): number {
     if (!plan) {
       return 0;
     }
     const targetDays: number = this.planTargetDays(plan);
     return Math.min(targetDays, Math.round(targetDays * this.planProgress(plan) / 100));
+  }
+
+  totalTargetDays(): number {
+    if (this.plans.length === 0) {
+      return this.heroDays();
+    }
+    let total = 0;
+    for (let i = 0; i < this.plans.length; i++) {
+      total += this.planTargetDays(this.plans[i]);
+    }
+    return Math.max(1, total);
+  }
+
+  totalCompletedDayUnits(): number {
+    let total = 0;
+    for (let i = 0; i < this.plans.length; i++) {
+      total += this.planTargetDays(this.plans[i]) * this.planProgress(this.plans[i]) / 100;
+    }
+    return Math.max(0, total);
+  }
+
+  totalCompletedDays(): number {
+    return Math.min(this.totalTargetDays(), Math.round(this.totalCompletedDayUnits()));
+  }
+
+  totalRemainingDays(): number {
+    return Math.max(0, this.totalTargetDays() - this.totalCompletedDays());
+  }
+
+  overallProgress(): number {
+    const totalTarget: number = this.totalTargetDays();
+    if (totalTarget <= 0) {
+      return 0;
+    }
+    return Math.max(0, Math.min(100, Math.round(this.totalCompletedDayUnits() * 100 / totalTarget)));
   }
 
   remainingDays(): number {
@@ -237,10 +275,15 @@ export struct PlanContent {
 
   progressWidth(plan: PlanItem | null, maxWidth: number): number {
     const progress: number = this.planProgress(plan);
-    if (progress <= 0) {
+    return this.progressValueWidth(progress, maxWidth);
+  }
+
+  progressValueWidth(progress: number, maxWidth: number): number {
+    const safeProgress: number = Math.max(0, Math.min(100, Math.round(progress || 0)));
+    if (safeProgress <= 0) {
       return 0;
     }
-    return Math.max(8, Math.round(maxWidth * progress / 100));
+    return Math.max(8, Math.round(maxWidth * safeProgress / 100));
   }
 
   progressTrackWidth(): number {
@@ -811,10 +854,10 @@ export struct PlanContent {
     this.editingWeeklyMinutes = this.planWeeklyTarget(plan);
     this.planSettingsError = '';
     this.showPlanSettings = true;
-    this.planSettingsProgress = 0;
+    this.planSettingsProgress = 0.01;
     clearTimeout(this.planSettingsTimer);
     this.planSettingsTimer = setTimeout(() => {
-      animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
+      animateTo({ duration: 260, curve: Curve.EaseOut }, () => {
         this.planSettingsProgress = 1;
       });
       this.planSettingsTimer = -1;
@@ -838,14 +881,15 @@ export struct PlanContent {
       this.planSettingsError = '';
       return;
     }
-    animateTo({ duration: 160, curve: Curve.EaseIn }, () => {
-      this.planSettingsProgress = 0;
+    animateTo({ duration: 180, curve: Curve.EaseIn }, () => {
+      this.planSettingsProgress = 0.01;
     });
     this.planSettingsTimer = setTimeout(() => {
+      this.planSettingsProgress = 0;
       this.showPlanSettings = false;
       this.planSettingsError = '';
       this.planSettingsTimer = -1;
-    }, 180);
+    }, 200);
   }
 
   adjustDailyMinutes(delta: number): void {
@@ -928,10 +972,11 @@ export struct PlanContent {
       );
       this.applyPlanSettingsLocally(plan.id, targetDays, dailyMinutesTarget, weeklyMinutesTarget);
       this.selectedPlanId = plan.id;
+      notifyPlanDataChanged();
       this.closePlanSettings(true, true);
       clearTimeout(this.planSettingsReloadTimer);
       this.planSettingsReloadTimer = setTimeout(() => {
-        notifyPlanDataChanged();
+        this.loadPlans();
         this.planSettingsReloadTimer = -1;
       }, 420);
     } catch (err) {
@@ -1204,24 +1249,24 @@ export struct PlanContent {
             .fontColor(PLAN_TEXT)
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
-          Text(`已完成 ${this.completedDays()} / ${this.heroDays()} 天`)
+          Text(`已完成 ${this.totalCompletedDays()} / ${this.totalTargetDays()} 天`)
             .fontColor(PLAN_MUTED)
             .fontSize(15)
         }
         .alignItems(HorizontalAlign.Start)
         Blank()
-        Text(`${this.planProgress(this.currentPlan())}%`)
+        Text(`${this.overallProgress()}%`)
           .fontColor(PLAN_GREEN)
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
       }
       .width('100%')
 
-      this.ProgressBar(this.currentPlan(), this.progressTrackWidth(), 9)
+      this.OverallProgressBar(this.progressTrackWidth(), 9)
 
       Row() {
-        this.StatItem('✓', `${this.completedDays()} 天`, '已完成', PLAN_GREEN)
-        this.StatItem('⌛', `${this.remainingDays()} 天`, '剩余天数', '#5C9CE6')
+        this.StatItem('✓', `${this.totalCompletedDays()} 天`, '已完成', PLAN_GREEN)
+        this.StatItem('⌛', `${this.totalRemainingDays()} 天`, '剩余天数', '#5C9CE6')
         this.StatItem('◫', `${this.activePlanCount()} 个`, '进行中', '#E6A23C')
         this.StatItem('▣', `${this.finishedBookCount()} 本`, '已读书籍', '#8576DE')
       }
@@ -1578,7 +1623,7 @@ export struct PlanContent {
               .fontWeight(FontWeight.Bold)
           }
           .width('100%')
-          Text(`${item.author} · ${item.targetDays}天计划 · 每天 ${this.planDailyTarget(item)} 分钟 · 每周 ${this.planWeeklyTarget(item)} 分钟`)
+          Text(`${item.author} · ${this.planTargetDays(item)}天计划 · 每天 ${this.planDailyTarget(item)} 分钟 · 每周 ${this.planWeeklyTarget(item)} 分钟`)
             .fontColor(PLAN_MUTED)
             .fontSize(13)
             .maxLines(1)
@@ -1589,19 +1634,20 @@ export struct PlanContent {
         .alignItems(HorizontalAlign.Start)
       }
       .layoutWeight(1)
-      .hitTestBehavior(HitTestMode.Transparent)
+      .hitTestBehavior(HitTestMode.Block)
       .onClick(() => {
         this.selectedPlanId = item.id;
         openReader(item.bookId, item.chapterId || '');
       })
 
-      Button('设置')
+      Text('设置')
           .fontColor(PLAN_GREEN_DARK)
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .width(76)
           .height(44)
-          .padding(0)
+          .lineHeight(44)
+          .textAlign(TextAlign.Center)
         .backgroundColor('#EDF8F1')
         .borderRadius(22)
         .shadow({ radius: 10, color: '#14000000', offsetX: 0, offsetY: 4 })
@@ -1938,6 +1984,25 @@ export struct PlanContent {
         .borderRadius(heightValue)
       Column() {}
         .width(this.progressWidth(plan, widthValue))
+        .height(heightValue)
+        .backgroundColor(PLAN_GREEN)
+        .borderRadius(heightValue)
+        .animation({ duration: 220, curve: Curve.EaseOut })
+    }
+    .width(widthValue)
+    .height(heightValue)
+  }
+
+  @Builder
+  OverallProgressBar(widthValue: number, heightValue: number) {
+    Stack({ alignContent: Alignment.Start }) {
+      Column() {}
+        .width(widthValue)
+        .height(heightValue)
+        .backgroundColor('#EEF0F3')
+        .borderRadius(heightValue)
+      Column() {}
+        .width(this.progressValueWidth(this.overallProgress(), widthValue))
         .height(heightValue)
         .backgroundColor(PLAN_GREEN)
         .borderRadius(heightValue)

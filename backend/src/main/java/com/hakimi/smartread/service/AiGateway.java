@@ -89,7 +89,8 @@ public class AiGateway {
         Map<String, Object> requestBody = payload == null ? Map.of() : new LinkedHashMap<>(payload);
         try {
             HttpRequest request = HttpRequest.newBuilder(streamUri(path))
-                    .timeout(Duration.ofSeconds(90))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .timeout(Duration.ofSeconds(180))
                     .header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
                     .header("Accept", "application/x-ndjson")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(requestBody),

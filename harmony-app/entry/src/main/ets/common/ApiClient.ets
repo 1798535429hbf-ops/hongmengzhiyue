@@ -3,9 +3,12 @@ import { util } from '@kit.ArkTS';
 import {
   AnalyticsEvent,
   ApiEnvelope,
+  BookmarkItem,
   Book,
   BookTagsBundle,
+  ChatRecord,
   CommerceResult,
+  NoteItem,
   PlanItem,
   ProfileBundle,
   ReaderBundle,
@@ -279,6 +282,69 @@ interface BookSearchPage {
   content?: Book[];
 }
 
+interface PlanItemPayload {
+  id?: number;
+  bookId?: number;
+  book_id?: number;
+  title?: string;
+  author?: string;
+  targetDays?: number;
+  target_days?: number;
+  dailyMinutesTarget?: number;
+  daily_minutes_target?: number;
+  weeklyMinutesTarget?: number;
+  weekly_minutes_target?: number;
+  progress?: number;
+  status?: string;
+  chapterId?: string;
+  chapter_id?: string;
+  scrollOffset?: number;
+  scroll_offset?: number;
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+  completedAt?: string;
+  completed_at?: string;
+  completedDates?: string[];
+  completed_dates?: string[];
+  coverColor?: string;
+  cover_color?: string;
+}
+
+interface ReadingProgressPayload {
+  planId?: number;
+  plan_id?: number;
+  bookId?: number;
+  book_id?: number;
+  chapterId?: string;
+  chapter_id?: string;
+  progress?: number;
+  scrollOffset?: number;
+  scroll_offset?: number;
+  status?: string;
+  updatedAt?: string;
+  updated_at?: string;
+}
+
+interface ProfileBundlePayload {
+  profile: UserProfile;
+  favorites?: Book[];
+  notes?: NoteItem[];
+  plans?: PlanItemPayload[];
+  chat_records?: ChatRecord[];
+  chats?: ChatRecord[];
+}
+
+interface ReaderBundlePayload {
+  book: Book;
+  plan: PlanItemPayload | null;
+  chapters?: ReadingChapter[];
+  content: ReadingContent | null;
+  progress: ReadingProgressPayload | null;
+  bookmarks?: BookmarkItem[];
+}
+
 interface AiStreamRawEvent {
   type?: string;
   event?: string;
@@ -300,6 +366,94 @@ interface AiStreamRawEvent {
 }
 
 export class ApiClient {
+  private static numberOrFallback(value: number | string | undefined, fallback: number): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed: number = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+    return fallback;
+  }
+
+  private static stringOrFallback(value: string | undefined, fallback: string = ''): string {
+    return value !== undefined && value !== null ? value : fallback;
+  }
+
+  private static normalizePlanItem(item: PlanItemPayload): PlanItem {
+    const targetDays: number = ApiClient.numberOrFallback(item.targetDays, ApiClient.numberOrFallback(item.target_days, 14));
+    const dailyMinutesTarget: number = ApiClient.numberOrFallback(
+      item.dailyMinutesTarget,
+      ApiClient.numberOrFallback(item.daily_minutes_target, 30)
+    );
+    const weeklyMinutesTarget: number = ApiClient.numberOrFallback(
+      item.weeklyMinutesTarget,
+      ApiClient.numberOrFallback(item.weekly_minutes_target, dailyMinutesTarget * 7)
+    );
+    const progress: number = ApiClient.numberOrFallback(item.progress, 0);
+    return {
+      id: ApiClient.numberOrFallback(item.id, 0),
+      bookId: ApiClient.numberOrFallback(item.bookId, ApiClient.numberOrFallback(item.book_id, 0)),
+      title: ApiClient.stringOrFallback(item.title, '未命名图书'),
+      author: ApiClient.stringOrFallback(item.author, '作者待补充'),
+      targetDays,
+      dailyMinutesTarget,
+      weeklyMinutesTarget,
+      progress,
+      status: ApiClient.stringOrFallback(item.status, progress >= 100 ? 'finished' : 'reading'),
+      chapterId: ApiClient.stringOrFallback(item.chapterId, ApiClient.stringOrFallback(item.chapter_id)),
+      scrollOffset: ApiClient.numberOrFallback(item.scrollOffset, ApiClient.numberOrFallback(item.scroll_offset, 0)),
+      createdAt: ApiClient.stringOrFallback(item.createdAt, ApiClient.stringOrFallback(item.created_at)),
+      updatedAt: ApiClient.stringOrFallback(item.updatedAt, ApiClient.stringOrFallback(item.updated_at)),
+      completedAt: ApiClient.stringOrFallback(item.completedAt, ApiClient.stringOrFallback(item.completed_at)),
+      completedDates: item.completedDates || item.completed_dates || [],
+      coverColor: ApiClient.stringOrFallback(item.coverColor, ApiClient.stringOrFallback(item.cover_color, '#DDE8E3')),
+    };
+  }
+
+  private static normalizePlanList(items: PlanItemPayload[]): PlanItem[] {
+    const plans: PlanItem[] = [];
+    for (let i = 0; i < (items || []).length; i++) {
+      plans.push(ApiClient.normalizePlanItem(items[i]));
+    }
+    return plans;
+  }
+
+  private static normalizeReadingProgress(item: ReadingProgressPayload): ReadingProgress {
+    const progress: number = ApiClient.numberOrFallback(item.progress, 0);
+    return {
+      planId: ApiClient.numberOrFallback(item.planId, ApiClient.numberOrFallback(item.plan_id, 0)),
+      bookId: ApiClient.numberOrFallback(item.bookId, ApiClient.numberOrFallback(item.book_id, 0)),
+      chapterId: ApiClient.stringOrFallback(item.chapterId, ApiClient.stringOrFallback(item.chapter_id)),
+      progress,
+      scrollOffset: ApiClient.numberOrFallback(item.scrollOffset, ApiClient.numberOrFallback(item.scroll_offset, 0)),
+      status: ApiClient.stringOrFallback(item.status, progress >= 100 ? 'finished' : 'reading'),
+      updatedAt: ApiClient.stringOrFallback(item.updatedAt, ApiClient.stringOrFallback(item.updated_at)),
+    };
+  }
+
+  private static normalizeProfileBundle(bundle: ProfileBundlePayload): ProfileBundle {
+    return {
+      profile: bundle.profile,
+      favorites: bundle.favorites || [],
+      notes: bundle.notes || [],
+      plans: ApiClient.normalizePlanList(bundle.plans || []),
+      chat_records: bundle.chat_records || bundle.chats || [],
+    };
+  }
+
+  private static normalizeReaderBundle(bundle: ReaderBundlePayload): ReaderBundle {
+    return {
+      book: bundle.book,
+      plan: bundle.plan ? ApiClient.normalizePlanItem(bundle.plan) : null,
+      chapters: bundle.chapters || [],
+      content: bundle.content,
+      progress: bundle.progress ? ApiClient.normalizeReadingProgress(bundle.progress) : null,
+      bookmarks: bundle.bookmarks || [],
+    };
+  }
+
   private static normalizeBookList(payload: Book[] | BookSearchPage): Book[] {
     if (Array.isArray(payload)) {
       return payload;
@@ -481,7 +635,8 @@ export class ApiClient {
 
   static async readerBundle(userId: number, bookId: number, chapterId: string = ''): Promise<ReaderBundle> {
     const suffix = chapterId ? `&chapterId=${encodeURIComponent(chapterId)}` : '';
-    return await ApiClient.get<ReaderBundle>(`/books/${bookId}/reader?userId=${userId}${suffix}`);
+    const bundle: ReaderBundlePayload = await ApiClient.get<ReaderBundlePayload>(`/books/${bookId}/reader?userId=${userId}${suffix}`);
+    return ApiClient.normalizeReaderBundle(bundle);
   }
 
   static async listChapters(bookId: number): Promise<ReadingChapter[]> {
@@ -595,7 +750,8 @@ export class ApiClient {
   }
 
   static async listPlans(userId: number): Promise<PlanItem[]> {
-    return await ApiClient.get<PlanItem[]>(`/plans?userId=${userId}`);
+    const plans: PlanItemPayload[] = await ApiClient.get<PlanItemPayload[]>(`/plans?userId=${userId}`);
+    return ApiClient.normalizePlanList(plans || []);
   }
 
   static async deletePlanByBook(userId: number, bookId: number): Promise<object> {
@@ -623,7 +779,8 @@ export class ApiClient {
       daily_minutes_target: options.dailyMinutesTarget,
       weekly_minutes_target: options.weeklyMinutesTarget,
     };
-    return await ApiClient.patch<ReadingProgress>(`/plans/${planId}`, payload);
+    const progressResult: ReadingProgressPayload = await ApiClient.patch<ReadingProgressPayload>(`/plans/${planId}`, payload);
+    return ApiClient.normalizeReadingProgress(progressResult);
   }
 
   static async updatePlanTargets(
@@ -726,7 +883,8 @@ export class ApiClient {
   }
 
   static async profile(userId: number): Promise<ProfileBundle> {
-    return await ApiClient.get<ProfileBundle>(`/users/profile?userId=${userId}`);
+    const bundle: ProfileBundlePayload = await ApiClient.get<ProfileBundlePayload>(`/users/profile?userId=${userId}`);
+    return ApiClient.normalizeProfileBundle(bundle);
   }
 
   static async saveProfile(profile: UserProfile): Promise<UserProfile> {
@@ -929,6 +1087,42 @@ export class ApiClient {
     return ApiClient.emitStreamEvent<T>(event, callbacks, normalize);
   }
 
+  private static emitStreamFrame<T>(
+    frame: string,
+    callbacks: AiStreamCallbacks<T>,
+    normalize: (result: object) => T
+  ): T | null {
+    const lines: string[] = (frame || '').split('\n');
+    const dataLines: string[] = [];
+    let hasSseField: boolean = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line: string = lines[i].trim();
+      if (!line) {
+        continue;
+      }
+      if (line.startsWith('data:')) {
+        hasSseField = true;
+        dataLines.push(line.substring(5).trim());
+      } else if (line.startsWith(':') || line.startsWith('event:') ||
+        line.startsWith('id:') || line.startsWith('retry:')) {
+        hasSseField = true;
+      }
+    }
+    if (dataLines.length > 0) {
+      return ApiClient.emitStreamLine<T>(dataLines.join('\n'), callbacks, normalize);
+    }
+    if (hasSseField) {
+      return null;
+    }
+    return ApiClient.emitStreamLine<T>(frame, callbacks, normalize);
+  }
+
+  private static isSseStreamLine(line: string): boolean {
+    const value: string = (line || '').trim();
+    return value.startsWith('data:') || value.startsWith('event:') ||
+      value.startsWith('id:') || value.startsWith('retry:') || value.startsWith(':');
+  }
+
   private static streamLinePayload(line: string): string {
     let value: string = (line || '').trim();
     if (!value || value === '[DONE]') {
@@ -1024,29 +1218,62 @@ export class ApiClient {
       const client = http.createHttp();
       const decoder = util.TextDecoder.create('utf-8');
       let buffer: string = '';
+      let sseFrame: string = '';
       let finalResult: T | null = null;
       let streamError: string = '';
       try {
         const result = await new Promise<T>((resolve, reject) => {
+          const requestCallbacks: AiStreamCallbacks<T> = {
+            onDelta: callbacks.onDelta,
+            onReasoning: callbacks.onReasoning,
+            onStatus: callbacks.onStatus,
+            onResult: callbacks.onResult,
+            onError: (message: string) => {
+              streamError = message || 'AI 流式响应失败';
+              callbacks.onError && callbacks.onError(streamError);
+            },
+          };
+          const processLine = (line: string) => {
+            if (ApiClient.isSseStreamLine(line) || sseFrame.length > 0) {
+              if (line.trim()) {
+                sseFrame += `${line}\n`;
+                return;
+              }
+              const next: T | null = ApiClient.emitStreamFrame<T>(sseFrame, requestCallbacks, normalize);
+              sseFrame = '';
+              if (next) {
+                finalResult = next;
+              }
+              return;
+            }
+            const next: T | null = ApiClient.emitStreamFrame<T>(line, requestCallbacks, normalize);
+            if (next) {
+              finalResult = next;
+            }
+          };
+          const flushFrame = () => {
+            if (sseFrame) {
+              const next: T | null = ApiClient.emitStreamFrame<T>(sseFrame, requestCallbacks, normalize);
+              sseFrame = '';
+              if (next) {
+                finalResult = next;
+              }
+            }
+          };
           client.on('dataReceive', (chunk: ArrayBuffer) => {
             buffer += ApiClient.decodeStreamChunk(decoder, chunk);
             const lines: string[] = buffer.split('\n');
             buffer = lines.pop() || '';
             for (let j = 0; j < lines.length; j++) {
-              const next: T | null = ApiClient.emitStreamLine<T>(lines[j], callbacks, normalize);
-              if (next) {
-                finalResult = next;
-              }
+              processLine(lines[j]);
             }
           });
           client.on('dataEnd', () => {
             const tail: string = buffer.trim();
             if (tail) {
-              const next: T | null = ApiClient.emitStreamLine<T>(tail, callbacks, normalize);
-              if (next) {
-                finalResult = next;
-              }
+              processLine(tail);
             }
+            flushFrame();
             if (finalResult) {
               resolve(finalResult);
             } else if (streamError) {
@@ -1064,7 +1291,7 @@ export class ApiClient {
             extraData: JSON.stringify(body),
             expectDataType: http.HttpDataType.ARRAY_BUFFER,
             connectTimeout: 5000,
-            readTimeout: 60000,
+            readTimeout: 180000,
           }).then((code: number) => {
             if (code >= 400) {
               streamError = `AI 流式接口返回 ${code}`;

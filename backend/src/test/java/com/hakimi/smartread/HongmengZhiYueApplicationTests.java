@@ -109,6 +109,7 @@ class HongmengZhiYueApplicationTests {
 		Method chatStream = AiController.class.getMethod("chatStream", Map.class);
 		Assertions.assertArrayEquals(new String[]{"application/x-ndjson"}, recommendStream.getAnnotation(PostMapping.class).produces());
 		Assertions.assertArrayEquals(new String[]{"application/x-ndjson"}, chatStream.getAnnotation(PostMapping.class).produces());
+		Assertions.assertTrue(gateway.contains("HttpClient.Version.HTTP_1_1"));
 		Assertions.assertTrue(gateway.contains("writeStreamError(output"));
 		Assertions.assertTrue(gateway.contains("event.put(\"type\", \"error\")"));
 		Assertions.assertTrue(gateway.contains("AI 流式传输失败"));

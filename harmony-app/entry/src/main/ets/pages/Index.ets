@@ -181,6 +181,9 @@ struct Index {
     if (index === 0 || index === 4) {
       return Theme.mobileRed;
     }
+    if (index === 2) {
+      return '#E0B66F';
+    }
     if (index === 3) {
       return Theme.mobileGreen;
     }
@@ -196,7 +199,7 @@ struct Index {
       return active ? $r('app.media.mobile_tab_store_active') : $r('app.media.mobile_tab_store');
     }
     if (index === 2) {
-      return active ? $r('app.media.mobile_tab_category_active') : $r('app.media.mobile_tab_category');
+      return active ? $r('app.media.mobile_tab_assistant_active') : $r('app.media.mobile_tab_assistant');
     }
     if (index === 3) {
       return active ? $r('app.media.mobile_tab_plan_active') : $r('app.media.mobile_tab_plan');
@@ -235,7 +238,7 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        if (this.activeTab === 3) {
+        if (this.activeTab === 2 || this.activeTab === 3) {
           Column() {
             this.ActivePage()
           }
@@ -327,7 +330,7 @@ struct Index {
     Row() {
       this.BottomTabItem(0, '书架')
       this.BottomTabItem(1, '书城')
-      this.BottomTabItem(2, '分类')
+      this.BottomTabItem(2, '助手')
       this.BottomTabItem(3, '计划')
       this.BottomTabItem(4, '我的')
     }

@@ -1,6 +1,5 @@
-import { ApiClient, RecommendResult, ToolTrace } from '../common/ApiClient';
-import { Book, RecommendationBook, SourceRef } from '../common/Models';
-import { AiResponseView } from '../common/AiResponseView';
+import { ApiClient, RecommendResult } from '../common/ApiClient';
+import { Book, RecommendationBook } from '../common/Models';
 import { BookCover } from '../common/BookCover';
 import { openBookDetail, openSearch } from '../common/Navigation';
 import { Theme } from '../common/Theme';
@@ -13,15 +12,6 @@ export struct StoreContent {
   @Prop pageWidth: number = 390;
   @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
   @State storeTabIndex: number = 0;
-  @State storeAiQuery: string = '';
-  @State storeAiAnswer: string = '';
-  @State storeAiReasoning: string = '';
-  @State storeAiFollowUp: string = '';
-  @State storeAiSources: SourceRef[] = [];
-  @State storeAiToolTrace: ToolTrace[] = [];
-  @State storeAiStatusText: string = '';
-  @State storeAiBusy: boolean = false;
-  @State storeAiBooks: RecommendationBook[] = [];
   @State storeRecommendBooks: RecommendationBook[] = [];
   @State storeRecommendReason: string = '';
   @State storeRecommendOffset: number = 0;
@@ -40,13 +30,6 @@ export struct StoreContent {
     this.storeRecommendBooks = [];
     this.storeRecommendReason = '';
     this.storeRecommendOffset = 0;
-    this.storeAiAnswer = '';
-    this.storeAiReasoning = '';
-    this.storeAiFollowUp = '';
-    this.storeAiSources = [];
-    this.storeAiToolTrace = [];
-    this.storeAiStatusText = '';
-    this.storeAiBooks = [];
     this.loadStoreRecommendations(true);
     this.loadStoreSection(true);
   }
@@ -82,14 +65,6 @@ export struct StoreContent {
     return STORE_TABS[this.storeTabIndex] || '精选';
   }
 
-  waitForThinkingFrame(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        resolve();
-      }, 650);
-    });
-  }
-
   async loadStoreSection(reset: boolean = false): Promise<void> {
     if (this.storeSectionLoading) {
       return;
@@ -110,82 +85,6 @@ export struct StoreContent {
       this.storeSectionError = `分区加载失败：${err}`;
     } finally {
       this.storeSectionLoading = false;
-    }
-  }
-
-  async askStoreAi(): Promise<void> {
-    const query = this.storeAiQuery.trim();
-    if (!query) {
-      this.storeAiAnswer = '可以直接输入主题、课程、考试或心情关键词；线索少的时候，我会先从书库高评分和高热度书里挑。';
-      this.storeAiReasoning = '';
-      this.storeAiFollowUp = '';
-      this.storeAiSources = [];
-      this.storeAiToolTrace = [];
-      return;
-    }
-    if (this.storeAiBusy) {
-      return;
-    }
-    const userId: number = UserSession.currentUserId();
-    if (userId <= 0) {
-      this.storeAiAnswer = '先登录一下，我就能结合你的阅读偏好，直接替你挑出更顺手的书。';
-      this.storeAiBooks = [];
-      this.storeAiReasoning = '';
-      this.storeAiFollowUp = '';
-      this.storeAiSources = [];
-      this.storeAiToolTrace = [];
-      return;
-    }
-    this.storeAiBusy = true;
-    this.storeAiAnswer = '';
-    this.storeAiReasoning = '';
-    this.storeAiFollowUp = '';
-    this.storeAiSources = [];
-    this.storeAiToolTrace = [];
-    this.storeAiStatusText = '正在思考';
-    let storeAiFailed: boolean = false;
-    try {
-      await this.waitForThinkingFrame();
-      const result: RecommendResult = await ApiClient.recommendStream(userId, query, 0, {
-        onDelta: (text: string) => {
-          this.storeAiAnswer += text;
-        },
-        onReasoning: (text: string) => {
-          this.storeAiReasoning += text;
-        },
-        onStatus: (text: string) => {
-          this.storeAiStatusText = text;
-        },
-        onResult: (value: RecommendResult) => {
-          this.storeAiAnswer = ApiClient.preferStreamText(this.storeAiAnswer, value.reason || '');
-          this.storeAiBooks = value.book_list || [];
-          this.storeAiFollowUp = value.follow_up_suggestion || '';
-          this.storeAiSources = value.sources || [];
-          this.storeAiToolTrace = value.tool_trace || [];
-          this.storeAiReasoning = value.hidden_reasoning || value.reasoning_content || value.reasoning || this.storeAiReasoning;
-        },
-        onError: (message: string) => {
-          this.storeAiStatusText = message;
-        },
-      });
-      this.storeAiAnswer = ApiClient.preferStreamText(this.storeAiAnswer, result.reason || '');
-      this.storeAiBooks = result.book_list || [];
-      this.storeAiFollowUp = result.follow_up_suggestion || '';
-      this.storeAiSources = result.sources || [];
-      this.storeAiToolTrace = result.tool_trace || [];
-      this.storeAiReasoning = result.hidden_reasoning || result.reasoning_content || result.reasoning || this.storeAiReasoning;
-    } catch (err) {
-      storeAiFailed = true;
-      this.storeAiStatusText = `推荐失败：${err}`;
-      this.storeAiBooks = [];
-      this.storeAiFollowUp = '';
-      this.storeAiSources = [];
-      this.storeAiToolTrace = [];
-    } finally {
-      this.storeAiBusy = false;
-      if (!storeAiFailed) {
-        this.storeAiStatusText = '';
-      }
     }
   }
 
@@ -280,155 +179,6 @@ export struct StoreContent {
       .width('100%')
       .justifyContent(FlexAlign.Start)
       .alignItems(VerticalAlign.Bottom)
-
-      Column({ space: 18 }) {
-        Row({ space: 14 }) {
-          Stack() {
-            Circle()
-              .width(44)
-              .height(44)
-              .fill('#FDF8F0')
-            Text('AI')
-              .fontColor(Theme.mobileOrange)
-              .fontSize(15)
-              .fontWeight(FontWeight.Bold)
-          }
-
-          AiResponseView({
-            answer: this.storeAiAnswer,
-            reasoning: this.storeAiReasoning,
-            followUpSuggestion: this.storeAiFollowUp,
-            sources: this.storeAiSources,
-            toolTrace: this.storeAiToolTrace,
-            busy: this.storeAiBusy,
-            statusText: this.storeAiStatusText,
-            emptyText: '你的 AI 阅读顾问\n直接说想读什么，我会像朋友一样帮你挑书',
-            compact: this.isCompact(),
-            maxAnswerLines: 8,
-          })
-            .layoutWeight(1)
-        }
-        .alignItems(VerticalAlign.Top)
-
-        Text('今天想读点什么？')
-          .fontColor(Theme.mobileText)
-          .fontSize(this.isCompact() ? 17 : 18)
-          .fontWeight(FontWeight.Medium)
-
-        Row({ space: 10 }) {
-          TextInput({ placeholder: '比如：想读人工智能入门、最近压力大想看轻松小说...', text: this.storeAiQuery })
-            .layoutWeight(1)
-            .height('100%')
-            .fontColor(Theme.mobileText)
-            .placeholderColor('#C0B7A6')
-            .fontSize(this.isCompact() ? 16 : 17)
-            .backgroundColor('transparent')
-            .border({ width: 0 })
-            .onChange((value: string) => {
-              this.storeAiQuery = value;
-            })
-            .onSubmit(() => {
-              if (!this.storeAiBusy) {
-                this.askStoreAi();
-              }
-            })
-          Stack() {
-            Circle()
-              .width(40)
-              .height(40)
-              .fill(this.storeAiBusy ? Theme.mobileOrange : (this.storeAiQuery.trim() ? Theme.mobileOrange : '#D2D4DB'))
-            if (this.storeAiBusy) {
-              LoadingProgress()
-                .width(16)
-                .height(16)
-                .color(Theme.mobileSurface)
-            } else {
-              Text('↑')
-                .fontColor(Theme.mobileSurface)
-                .fontSize(20)
-                .fontWeight(FontWeight.Medium)
-            }
-          }
-          .opacity(this.storeAiBusy ? 0.92 : 1)
-          .onClick(() => {
-            if (!this.storeAiBusy) {
-              this.askStoreAi();
-            }
-          })
-        }
-        .width('100%')
-        .height(this.isCompact() ? 104 : 116)
-        .padding({ left: 18, right: 16, top: 10, bottom: 10 })
-        .backgroundColor('#FFFDF8')
-        .border({ width: 1, color: '#EFE2D0' })
-        .borderRadius(24)
-
-        if (this.storeAiBooks.length > 0) {
-          Column({ space: 10 }) {
-            Row({ space: 8 }) {
-              Row({}) {}
-                .width(3)
-                .height(16)
-                .borderRadius(2)
-                .backgroundColor(Theme.mobileOrange)
-              Text('AI 智能推荐')
-                .fontColor(Theme.mobileText)
-                .fontSize(16)
-                .fontWeight(FontWeight.Bold)
-              Blank()
-              Text(this.storeAiBusy ? '更新中' : '已就绪')
-                .fontColor(Theme.mobileSubtext)
-                .fontSize(12)
-            }
-            ForEach(this.storeAiBooks, (rec: RecommendationBook) => {
-              Row({ space: 12 }) {
-                Column({ space: 5 }) {
-                  Text(rec.title)
-                    .fontColor(Theme.mobileText)
-                    .fontSize(16)
-                    .fontWeight(FontWeight.Medium)
-                  if (!rec.titleOnly && rec.author) {
-                    Text(rec.author)
-                      .fontColor(Theme.mobileSubtext)
-                      .fontSize(13)
-                  }
-                  if (!rec.titleOnly && rec.reason) {
-                    Text(rec.reason)
-                      .fontColor(Theme.mobileBlue)
-                      .fontSize(12)
-                      .lineHeight(18)
-                      .maxLines(2)
-                  }
-                }
-                .layoutWeight(1)
-                .alignItems(HorizontalAlign.Start)
-                if (this.canOpenRecommendation(rec)) {
-                  Row() {
-                    Text('详情 >')
-                      .fontColor(Theme.mobileOrange)
-                      .fontSize(13)
-                      .fontWeight(FontWeight.Medium)
-                  }
-                  .onClick(() => {
-                    openBookDetail(rec.id);
-                  })
-                }
-              }
-              .width('100%')
-              .padding(14)
-              .backgroundColor('#FDFAF5')
-              .borderRadius(16)
-              .border({ width: 1, color: '#F0E6D0' })
-            }, (rec: RecommendationBook, index: number) => `${rec.id}-${rec.title}-${index}`)
-          }
-          .width('100%')
-        }
-      }
-      .width('100%')
-      .padding(16)
-      .backgroundColor(Theme.mobileSurface)
-      .borderRadius(24)
-      .shadow({ radius: 20, color: '#18000000', offsetX: 0, offsetY: 10 })
 
       if (this.storeRecommendBooks.length > 0) {
         Column({ space: 14 }) {

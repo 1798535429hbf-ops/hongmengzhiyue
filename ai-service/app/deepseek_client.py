@@ -68,7 +68,7 @@ class DeepSeekClient:
                     "Content-Type": "application/json",
                 },
                 json=request_json,
-                timeout=60,
+                timeout=(10, 180),
                 stream=True,
             )
         except requests.RequestException as exc:

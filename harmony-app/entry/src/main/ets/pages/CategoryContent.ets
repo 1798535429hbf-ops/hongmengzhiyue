@@ -1,1206 +1,612 @@
-import { ApiClient } from '../common/ApiClient';
-import { Book } from '../common/Models';
-import { BookCover } from '../common/BookCover';
-import { goBack, openBookDetail } from '../common/Navigation';
-import { Theme } from '../common/Theme';
+import { ApiClient, RecommendResult } from '../common/ApiClient';
+import { ChatRecord, RecommendationBook, SourceRef } from '../common/Models';
+import { openBookDetail, openLogin } from '../common/Navigation';
+import { UserSession } from '../common/UserSession';
 
-type AudienceKey = 'male' | 'female';
-type PanelMode = 'gender' | 'all' | 'tags';
-type FocusArea = 'male' | 'female' | 'tags';
-
-interface AudienceOption {
-  key: AudienceKey;
-  label: string;
-  keyword: string;
-  accent: string;
-  soft: string;
+interface AssistantPrompt {
+  icon: string;
+  color: string;
+  tint: string;
+  text: string;
 }
-
-interface SubjectGroup {
-  key: string;
-  title: string;
-  summary: string;
-  tone: string;
-  accent: string;
-  aliases: string[];
-}
-
-interface CategoryCard {
-  key: string;
-  title: string;
-  summary: string;
-  tone: string;
-  accent: string;
-  count: number;
-  books: Book[];
-  sampleBook: Book | null;
-}
-
-interface TagCard {
-  tag: string;
-  count: number;
-  tone: string;
-  accent: string;
-  books: Book[];
-  sampleBook: Book | null;
-}
-
-const AUDIENCE_OPTIONS: AudienceOption[] = [
-  {
-    key: 'male',
-    label: '男生',
-    keyword: '男生向',
-    accent: '#D84B45',
-    soft: '#FCEBE9',
-  },
-  {
-    key: 'female',
-    label: '女生',
-    keyword: '女生向',
-    accent: '#D84B45',
-    soft: '#FCEBE9',
-  },
-];
-
-const SUBJECT_GROUPS: SubjectGroup[] = [
-  {
-    key: 'humanity',
-    title: '人文',
-    summary: '文学、写作、心理与通识阅读，适合先建立阅读感受。',
-    tone: '#F7EFE7',
-    accent: '#B27A58',
-    aliases: ['人文', '文学', '写作', '心理学', '社会学', '通识', '英语', '设计'],
-  },
-  {
-    key: 'geography',
-    title: '地理',
-    summary: '从地理和空间视角理解文明、国家与环境变化。',
-    tone: '#EAF1FF',
-    accent: '#5F7DFF',
-    aliases: ['地理', '文明', '人类学', '世界', '空间', '区域', '环境'],
-  },
-  {
-    key: 'history',
-    title: '历史',
-    summary: '人物、制度和时代背景，适合搭建时间线与大局观。',
-    tone: '#FFF1E4',
-    accent: '#D08A39',
-    aliases: ['历史', '明史', '古典', '时代', '中国史', '世界史'],
-  },
-  {
-    key: 'politics',
-    title: '政治',
-    summary: '经济、组织、商业与治理逻辑，偏现实问题的理解。',
-    tone: '#EDF6ED',
-    accent: '#4E8A5B',
-    aliases: ['政治', '经济', '管理', '创业', '商业', '项目管理', '软件工程'],
-  },
-  {
-    key: 'science',
-    title: '科学',
-    summary: '数理、计算、工程和方法论，适合做系统进阶。',
-    tone: '#EEF4FF',
-    accent: '#5A79FF',
-    aliases: ['科学', '数学', '算法', 'AI', '人工智能', '机器学习', '深度学习', '物理', '电路', '信号', '数据结构', '数据库', '网络', '操作系统', '编译', 'Linux', 'Go', 'Python', '统计'],
-  },
-  {
-    key: 'philosophy',
-    title: '哲学',
-    summary: '思考、认知、判断和方法，适合慢一点读。',
-    tone: '#F4EEF9',
-    accent: '#8B5EDB',
-    aliases: ['哲学', '思考', '决策', '认知', '方法', '设计心理学', '快与慢', '判断'],
-  },
-];
-
-const TAG_HIGHLIGHT_COLORS: string[] = ['#F7EFE7', '#EAF1FF', '#FFF1E4', '#EDF6ED', '#EEF4FF', '#F4EEF9'];
-const OTHER_SUBJECT_GROUP: SubjectGroup = {
-  key: 'other',
-  title: '其他',
-  summary: '暂未归入学科卡片的作品，先集中放在这里，避免好书被藏起来。',
-  tone: '#F3F4F8',
-  accent: '#7C8493',
-  aliases: [],
-};
 
 @Component
 export struct CategoryContent {
   @Prop pageWidth: number = 390;
-  @State panelMode: PanelMode = 'gender';
-  @State selectedAudience: AudienceKey = 'male';
-  @State selectedTagAudience: AudienceKey = 'male';
-  @State focusArea: FocusArea = 'male';
-  @State selectedCategoryKey: string = 'all';
-  @State selectedTagFilter: string = '';
-  @State books: Book[] = [];
-  @State humanityBooks: Book[] = [];
-  @State geographyBooks: Book[] = [];
-  @State historyBooks: Book[] = [];
-  @State politicsBooks: Book[] = [];
-  @State scienceBooks: Book[] = [];
-  @State philosophyBooks: Book[] = [];
-  @State busyText: string = '';
-  @State errorText: string = '';
-  loadToken: number = 0;
+  @StorageProp('smartread_session_user_id') @Watch('onSessionUserChange') sessionUserId: number = 0;
+  @State query: string = '';
+  @State answer: string = '';
+  @State followUp: string = '';
+  @State sources: SourceRef[] = [];
+  @State recommendedBooks: RecommendationBook[] = [];
+  @State statusText: string = '';
+  @State busy: boolean = false;
+  @State recentChats: ChatRecord[] = [];
+  @State historyBusy: boolean = false;
+  @State historyError: string = '';
+  @State promptSetIndex: number = 0;
 
   aboutToAppear(): void {
-    this.reloadBooks();
+    this.loadHistory();
+  }
+
+  onSessionUserChange(): void {
+    this.answer = '';
+    this.followUp = '';
+    this.sources = [];
+    this.recommendedBooks = [];
+    this.statusText = '';
+    this.loadHistory();
   }
 
   isCompact(): boolean {
     return this.pageWidth < 360;
   }
 
-  sidebarWidth(): number {
-    if (this.pageWidth >= 720) {
-      return 104;
-    }
-    return this.isCompact() ? 76 : 86;
+  maxContentWidth(): number {
+    return this.pageWidth >= 720 ? 620 : 520;
   }
 
-  contentGap(): number {
-    return this.isCompact() ? 12 : 16;
+  topButtonSize(): number {
+    return this.isCompact() ? 44 : 50;
   }
 
-  headerSize(): number {
-    if (this.pageWidth >= 720) {
-      return 34;
-    }
-    return this.isCompact() ? 26 : 30;
+  horizontalInset(): number {
+    return this.isCompact() ? 2 : 4;
   }
 
-  bodyWidth(): number {
-    if (this.pageWidth >= 720) {
-      return 680;
-    }
-    return Math.max(260, this.pageWidth - this.sidebarWidth() - 36);
+  titleSize(): number {
+    return this.isCompact() ? 44 : 50;
   }
 
-  currentAudienceOption(): AudienceOption {
-    for (let i = 0; i < AUDIENCE_OPTIONS.length; i++) {
-      if (AUDIENCE_OPTIONS[i].key === this.selectedAudience) {
-        return AUDIENCE_OPTIONS[i];
-      }
-    }
-    return AUDIENCE_OPTIONS[0];
+  loggedIn(): boolean {
+    return Number.isFinite(this.sessionUserId) && this.sessionUserId > 0;
   }
 
-  currentAudienceLabel(): string {
-    return `${this.currentAudienceOption().label}向`;
+  promptGroups(): AssistantPrompt[][] {
+    return [
+      [
+        { icon: '▤', color: '#6E78FF', tint: '#F1F2FF', text: '推荐几本适合入门的科幻小说' },
+        { icon: '书', color: '#51C7AA', tint: '#EEFDF9', text: '《百年孤独》中的象征意义解析' },
+        { icon: '灯', color: '#F0A13A', tint: '#FFF6E8', text: '如何培养高效的阅读习惯？' },
+      ],
+      [
+        { icon: '策', color: '#6E78FF', tint: '#F1F2FF', text: '帮我制定一本专业书的阅读计划' },
+        { icon: '问', color: '#51C7AA', tint: '#EEFDF9', text: '我想准备竞赛，先读哪些书？' },
+        { icon: '摘', color: '#F0A13A', tint: '#FFF6E8', text: '怎么把读书笔记整理成复习材料？' },
+      ],
+    ];
   }
 
-  tagAudienceOption(): AudienceOption {
-    for (let i = 0; i < AUDIENCE_OPTIONS.length; i++) {
-      if (AUDIENCE_OPTIONS[i].key === this.selectedTagAudience) {
-        return AUDIENCE_OPTIONS[i];
-      }
-    }
-    return AUDIENCE_OPTIONS[0];
+  currentPrompts(): AssistantPrompt[] {
+    const groups = this.promptGroups();
+    return groups[this.promptSetIndex % groups.length];
   }
 
-  tagAudienceKeyword(): string {
-    return this.tagAudienceOption().keyword;
+  changePromptSet(): void {
+    this.promptSetIndex = (this.promptSetIndex + 1) % this.promptGroups().length;
   }
 
-  audienceTitle(): string {
-    return `${this.currentAudienceOption().label}向作品`;
-  }
-
-  categoryTabs(): SubjectGroup[] {
-    const groups: SubjectGroup[] = [];
-    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
-      groups.push(SUBJECT_GROUPS[i]);
-    }
-    groups.push(OTHER_SUBJECT_GROUP);
-    return groups;
-  }
-
-  formatCount(count: number): string {
-    if (count >= 10000) {
-      return `${(count / 10000).toFixed(count >= 100000 ? 0 : 1)}万部`;
-    }
-    return `${count}部`;
-  }
-
-  splitTags(raw: string): string[] {
-    if (!raw) {
-      return [];
-    }
-    const parts: string[] = raw.split(/[，,、\/\s]+/);
-    const tags: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const tag = parts[i].trim();
-      if (tag) {
-        tags.push(tag);
-      }
-    }
-    return tags;
-  }
-
-  primaryTag(raw: string): string {
-    const tags = this.splitTags(raw);
-    for (let i = 0; i < tags.length; i++) {
-      if (tags[i] !== '男生向' && tags[i] !== '女生向') {
-        return tags[i];
-      }
-    }
-    return '';
-  }
-
-  bookTagsText(book: Book): string {
-    return `${book.tags || ''},${book.category || ''}`;
-  }
-
-  hasAudienceTag(audience: AudienceKey): boolean {
-    const keyword = audience === 'male' ? AUDIENCE_OPTIONS[0].keyword : AUDIENCE_OPTIONS[1].keyword;
-    for (let i = 0; i < this.books.length; i++) {
-      if (this.matchesTag(this.books[i], keyword)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  booksForAudience(audience: AudienceKey): Book[] {
-    if (!this.hasAudienceTag(audience)) {
-      return this.books;
-    }
-    const keyword = audience === 'male' ? AUDIENCE_OPTIONS[0].keyword : AUDIENCE_OPTIONS[1].keyword;
-    const values: Book[] = [];
-    for (let i = 0; i < this.books.length; i++) {
-      const book = this.books[i];
-      if (this.matchesTag(book, keyword)) {
-        values.push(book);
-      }
-    }
-    return values;
-  }
-
-  currentAudienceBooks(): Book[] {
-    return this.booksForAudience(this.selectedAudience);
-  }
-
-  tagAudienceBooks(): Book[] {
-    return this.booksForAudience(this.selectedTagAudience);
-  }
-
-  filterBooksForAudience(values: Book[], audience: AudienceKey): Book[] {
-    if (!this.hasAudienceTag(audience)) {
-      return values;
-    }
-    const keyword = audience === 'male' ? AUDIENCE_OPTIONS[0].keyword : AUDIENCE_OPTIONS[1].keyword;
-    const filtered: Book[] = [];
-    for (let i = 0; i < values.length; i++) {
-      if (this.matchesTag(values[i], keyword)) {
-        filtered.push(values[i]);
-      }
-    }
-    return filtered;
-  }
-
-  localCategoryBooks(categoryKey: string): Book[] {
-    const values: Book[] = [];
-    for (let i = 0; i < this.books.length; i++) {
-      const book = this.books[i];
-      if (this.matchesCategory(book, categoryKey)) {
-        values.push(book);
-      }
-    }
-    return values;
-  }
-
-  rawCategoryBooks(categoryKey: string): Book[] {
-    if (categoryKey === 'humanity') {
-      return this.humanityBooks.length > 0 ? this.humanityBooks : this.localCategoryBooks(categoryKey);
-    }
-    if (categoryKey === 'geography') {
-      return this.geographyBooks.length > 0 ? this.geographyBooks : this.localCategoryBooks(categoryKey);
-    }
-    if (categoryKey === 'history') {
-      return this.historyBooks.length > 0 ? this.historyBooks : this.localCategoryBooks(categoryKey);
-    }
-    if (categoryKey === 'politics') {
-      return this.politicsBooks.length > 0 ? this.politicsBooks : this.localCategoryBooks(categoryKey);
-    }
-    if (categoryKey === 'science') {
-      return this.scienceBooks.length > 0 ? this.scienceBooks : this.localCategoryBooks(categoryKey);
-    }
-    if (categoryKey === 'philosophy') {
-      return this.philosophyBooks.length > 0 ? this.philosophyBooks : this.localCategoryBooks(categoryKey);
-    }
-    return this.localCategoryBooks(categoryKey);
-  }
-
-  categoryBooksForKey(categoryKey: string): Book[] {
-    return this.filterBooksForAudience(this.rawCategoryBooks(categoryKey), this.selectedAudience);
-  }
-
-  audienceBooksFiltered(): Book[] {
-    const filtered: Book[] = [];
-    const sourceBooks = this.selectedCategoryKey === 'all'
-      ? this.currentAudienceBooks()
-      : this.categoryBooksForKey(this.selectedCategoryKey);
-    for (let i = 0; i < sourceBooks.length; i++) {
-      const book = sourceBooks[i];
-      if (this.selectedTagFilter && !this.matchesTag(book, this.selectedTagFilter)) {
-        continue;
-      }
-      filtered.push(book);
-    }
-    return filtered;
-  }
-
-  matchesTag(book: Book, tag: string): boolean {
-    if (!tag) {
-      return true;
-    }
-    const tags = this.splitTags(book.tags);
-    for (let i = 0; i < tags.length; i++) {
-      if (tags[i] === tag) {
-        return true;
-      }
-    }
-    const haystack = this.bookTagsText(book);
-    return haystack.indexOf(tag) >= 0;
-  }
-
-  bookHaystack(book: Book): string {
-    return this.bookTagsText(book);
-  }
-
-  matchesKnownCategory(book: Book): boolean {
-    const haystack = this.bookHaystack(book);
-    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
-      const group = SUBJECT_GROUPS[i];
-      for (let index = 0; index < group.aliases.length; index++) {
-        if (haystack.indexOf(group.aliases[index]) >= 0) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  matchesCategory(book: Book, categoryKey: string): boolean {
-    if (categoryKey === 'all') {
-      return true;
-    }
-    if (categoryKey === 'other') {
-      return !this.matchesKnownCategory(book);
-    }
-    for (let i = 0; i < SUBJECT_GROUPS.length; i++) {
-      const group = SUBJECT_GROUPS[i];
-      if (group.key !== categoryKey) {
-        continue;
-      }
-      const haystack = this.bookHaystack(book);
-      for (let index = 0; index < group.aliases.length; index++) {
-        if (haystack.indexOf(group.aliases[index]) >= 0) {
-          return true;
-        }
-      }
-      return false;
-    }
-    return true;
-  }
-
-  categoryCards(): CategoryCard[] {
-    const cards: CategoryCard[] = [];
-    const groups = this.categoryTabs();
-    for (let i = 0; i < groups.length; i++) {
-      const group = groups[i];
-      const books = this.categoryBooksForKey(group.key);
-      cards.push({
-        key: group.key,
-        title: group.title,
-        summary: group.summary,
-        tone: group.tone,
-        accent: group.accent,
-        count: books.length,
-        books,
-        sampleBook: books.length > 0 ? books[0] : null,
-      });
-    }
-    return cards;
-  }
-
-  categoryCardKey(card: CategoryCard): string {
-    const sampleId = card.sampleBook ? card.sampleBook.id : 0;
-    return `${this.selectedAudience}_${card.key}_${card.count}_${sampleId}`;
-  }
-
-  categoryTabKey(group: SubjectGroup): string {
-    return `${this.selectedCategoryKey}_${group.key}`;
-  }
-
-  tagCardKey(tag: TagCard): string {
-    const sampleId = tag.sampleBook ? tag.sampleBook.id : 0;
-    return `${this.selectedTagAudience}_${tag.tag}_${tag.count}_${sampleId}`;
-  }
-
-  topCategoryCards(): CategoryCard[] {
-    return this.categoryCards();
-  }
-
-  tagCardIndex(cards: TagCard[], tag: string): number {
-    for (let i = 0; i < cards.length; i++) {
-      if (cards[i].tag === tag) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  tagCards(): TagCard[] {
-    const values: TagCard[] = [];
-    const sourceBooks = this.tagAudienceBooks();
-    for (let i = 0; i < sourceBooks.length; i++) {
-      const book = sourceBooks[i];
-      const tags = this.splitTags(book.tags);
-      for (let index = 0; index < tags.length; index++) {
-        const tag = tags[index];
-        if (!tag || tag === '男生向' || tag === '女生向' || tag === this.tagAudienceKeyword()) {
-          continue;
-        }
-        let cardIndex = this.tagCardIndex(values, tag);
-        if (cardIndex < 0) {
-          const tone = TAG_HIGHLIGHT_COLORS[values.length % TAG_HIGHLIGHT_COLORS.length];
-          values.push({
-            tag,
-            count: 0,
-            tone,
-            accent: this.tagAudienceOption().accent,
-            books: [],
-            sampleBook: null,
-          });
-          cardIndex = values.length - 1;
-        }
-        values[cardIndex].count++;
-        if (values[cardIndex].books.length < 3) {
-          values[cardIndex].books.push(book);
-        }
-        if (!values[cardIndex].sampleBook) {
-          values[cardIndex].sampleBook = book;
-        }
-      }
-    }
-
-    values.sort((left: TagCard, right: TagCard) => {
-      if (right.count !== left.count) {
-        return right.count - left.count;
-      }
-      return left.tag.localeCompare(right.tag);
+  waitForThinkingFrame(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resolve();
+      }, 500);
     });
-    return values;
   }
 
-  hotTags(): TagCard[] {
-    return this.tagCards().slice(0, 4);
-  }
-
-  otherTags(): TagCard[] {
-    return this.tagCards().slice(4);
-  }
-
-  appendUniqueBooks(values: Book[], next: Book[]): Book[] {
-    const merged: Book[] = [];
-    for (let i = 0; i < values.length; i++) {
-      merged.push(values[i]);
-    }
-    for (let i = 0; i < next.length; i++) {
-      const book = next[i];
-      let exists = false;
-      for (let index = 0; index < merged.length; index++) {
-        if (merged[index].id === book.id) {
-          exists = true;
-          break;
-        }
-      }
-      if (!exists) {
-        merged.push(book);
-      }
-    }
-    return merged;
-  }
-
-  async loadBooksByTag(tag: string): Promise<Book[]> {
-    let loadedBooks = await ApiClient.searchBooks('', tag, 0, 50);
-    if (loadedBooks && loadedBooks.length >= 50) {
-      const nextPageBooks = await ApiClient.searchBooks('', tag, 1, 50);
-      loadedBooks = this.appendUniqueBooks(loadedBooks, nextPageBooks || []);
-    }
-    return Array.isArray(loadedBooks) ? loadedBooks : [];
-  }
-
-  async safeLoadBooksByTag(tag: string): Promise<Book[]> {
-    try {
-      return await this.loadBooksByTag(tag);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  async reloadBooks(): Promise<void> {
-    const token = ++this.loadToken;
-    this.busyText = '正在读取分类';
-    this.errorText = '';
-    try {
-      const loadedBooks = await this.loadBooksByTag('');
-      const humanityBooks = await this.safeLoadBooksByTag('人文');
-      const geographyBooks = await this.safeLoadBooksByTag('地理');
-      const historyBooks = await this.safeLoadBooksByTag('历史');
-      const politicsBooks = await this.safeLoadBooksByTag('政治');
-      const scienceBooks = await this.safeLoadBooksByTag('科学');
-      const philosophyBooks = await this.safeLoadBooksByTag('哲学');
-      if (token !== this.loadToken) {
-        return;
-      }
-      this.books = loadedBooks;
-      this.humanityBooks = humanityBooks;
-      this.geographyBooks = geographyBooks;
-      this.historyBooks = historyBooks;
-      this.politicsBooks = politicsBooks;
-      this.scienceBooks = scienceBooks;
-      this.philosophyBooks = philosophyBooks;
-    } catch (err) {
-      if (token !== this.loadToken) {
-        return;
-      }
-      this.errorText = `分类加载失败：${err}`;
-      this.books = [];
-      this.humanityBooks = [];
-      this.geographyBooks = [];
-      this.historyBooks = [];
-      this.politicsBooks = [];
-      this.scienceBooks = [];
-      this.philosophyBooks = [];
-    } finally {
-      if (token === this.loadToken) {
-        this.busyText = '';
-      }
-    }
-  }
-
-  switchAudience(audience: AudienceKey): void {
-    this.selectedAudience = audience;
-    this.focusArea = audience;
-    this.selectedCategoryKey = 'all';
-    this.selectedTagFilter = '';
-    this.panelMode = 'gender';
-    this.selectedTagAudience = audience;
-  }
-
-  switchTagAudience(audience: AudienceKey): void {
-    this.selectedTagAudience = audience;
-    this.focusArea = 'tags';
-    this.selectedCategoryKey = 'all';
-    this.selectedTagFilter = '';
-    this.panelMode = 'tags';
-  }
-
-  openAllWorks(categoryKey: string = 'all'): void {
-    this.focusArea = this.selectedAudience;
-    this.selectedCategoryKey = categoryKey;
-    this.selectedTagFilter = '';
-    this.panelMode = 'all';
-  }
-
-  openCategory(categoryKey: string): void {
-    this.focusArea = this.selectedAudience;
-    this.selectedCategoryKey = categoryKey;
-    this.selectedTagFilter = '';
-    this.panelMode = 'all';
-  }
-
-  openTagPanel(): void {
-    this.focusArea = 'tags';
-    this.selectedTagAudience = 'male';
-    this.selectedTagFilter = '';
-    this.selectedCategoryKey = 'all';
-    this.panelMode = 'tags';
-  }
-
-  backToOverview(): void {
-    this.focusArea = this.selectedAudience;
-    this.selectedTagFilter = '';
-    this.selectedCategoryKey = 'all';
-    this.panelMode = 'gender';
-  }
-
-  selectTag(tag: string): void {
-    this.selectedAudience = this.selectedTagAudience;
-    this.focusArea = this.selectedAudience;
-    this.selectedTagFilter = tag;
-    this.selectedCategoryKey = 'all';
-    this.panelMode = 'all';
-  }
-
-  selectCategoryTab(categoryKey: string): void {
-    this.selectedCategoryKey = categoryKey;
-    this.selectedTagFilter = '';
-  }
-
-  isCategoryTabSelected(categoryKey: string): boolean {
-    return this.selectedCategoryKey === categoryKey;
-  }
-
-  isTagAudienceSelected(audience: AudienceKey): boolean {
-    return this.selectedTagAudience === audience;
-  }
-
-  tagAudienceAccent(audience: AudienceKey): string {
-    return audience === 'female' ? AUDIENCE_OPTIONS[1].accent : AUDIENCE_OPTIONS[0].accent;
-  }
-
-  isSideAreaSelected(area: FocusArea): boolean {
-    if (area === 'tags') {
-      return this.panelMode === 'tags';
-    }
-    return this.panelMode !== 'tags' && this.selectedAudience === area;
-  }
-
-  sideItemAccent(area: FocusArea): string {
-    if (area === 'female') {
-      return AUDIENCE_OPTIONS[1].accent;
-    }
-    if (area === 'tags') {
-      return Theme.mobilePurple;
-    }
-    return AUDIENCE_OPTIONS[0].accent;
-  }
-
-  sideItemTone(area: FocusArea): string {
-    if (area === 'female') {
-      return AUDIENCE_OPTIONS[1].soft;
-    }
-    if (area === 'tags') {
-      return '#F4EEF9';
-    }
-    return AUDIENCE_OPTIONS[0].soft;
-  }
-
-  openBook(book: Book): void {
-    if (!book || !book.id) {
+  async loadHistory(): Promise<void> {
+    if (!this.loggedIn()) {
+      this.recentChats = [];
+      this.historyBusy = false;
+      this.historyError = '';
       return;
     }
-    openBookDetail(book.id);
+    this.historyBusy = true;
+    this.historyError = '';
+    try {
+      const bundle = await ApiClient.profile(this.sessionUserId);
+      this.recentChats = (bundle.chat_records || []).slice(0, 3);
+    } catch (err) {
+      this.recentChats = [];
+      this.historyError = `历史对话加载失败：${err}`;
+    } finally {
+      this.historyBusy = false;
+    }
+  }
+
+  async askAssistant(seed: string = ''): Promise<void> {
+    const nextQuery: string = (seed || this.query || '').trim();
+    if (!nextQuery) {
+      this.statusText = '可以输入课程、主题、书名或阅读目标，我会基于书库和画像给出建议。';
+      return;
+    }
+    if (!this.loggedIn()) {
+      this.statusText = '先登录后，我才能结合你的画像和历史记录进行推荐。';
+      openLogin();
+      return;
+    }
+    if (this.busy) {
+      return;
+    }
+
+    this.query = nextQuery;
+    this.busy = true;
+    this.answer = '';
+    this.followUp = '';
+    this.sources = [];
+    this.recommendedBooks = [];
+    this.statusText = '正在思考';
+    let failed: boolean = false;
+
+    try {
+      await this.waitForThinkingFrame();
+      const result: RecommendResult = await ApiClient.recommendStream(this.sessionUserId, nextQuery, 0, {
+        onDelta: (text: string) => {
+          this.answer += text;
+        },
+        onStatus: (text: string) => {
+          this.statusText = text;
+        },
+        onResult: (value: RecommendResult) => {
+          this.answer = ApiClient.preferStreamText(this.answer, value.reason || '');
+          this.followUp = value.follow_up_suggestion || '';
+          this.sources = value.sources || [];
+          this.recommendedBooks = value.book_list || [];
+        },
+        onError: (message: string) => {
+          this.statusText = message;
+        },
+      });
+      this.answer = ApiClient.preferStreamText(this.answer, result.reason || '');
+      this.followUp = result.follow_up_suggestion || '';
+      this.sources = result.sources || [];
+      this.recommendedBooks = result.book_list || [];
+    } catch (err) {
+      failed = true;
+      this.statusText = `助手连接失败：${err}`;
+      this.recommendedBooks = [];
+      this.followUp = '';
+      this.sources = [];
+    } finally {
+      this.busy = false;
+      if (!failed) {
+        this.statusText = '';
+      }
+      this.loadHistory();
+    }
+  }
+
+  canOpenRecommendation(rec: RecommendationBook): boolean {
+    return !!rec && rec.id > 0 && !rec.titleOnly;
+  }
+
+  historyTime(value: string): string {
+    if (!value) {
+      return '';
+    }
+    if (value.length >= 16) {
+      return value.substring(5, 16).replace('T', ' ');
+    }
+    return value;
   }
 
   build() {
     Column() {
-      this.TopBar()
+      Column() {
+        Scroll() {
+          Column() {
+            this.TopActions()
+            this.Hero()
+            this.PromptCard()
 
-      if (this.busyText) {
-        this.StatusBanner(this.busyText, Theme.mobileBlue)
-      }
-      if (this.errorText) {
-        this.StatusBanner(this.errorText, '#C85B52')
-      }
+            if (this.busy || this.answer || this.statusText || this.recommendedBooks.length > 0) {
+              this.ResponsePanel()
+            }
 
-      Row({ space: 0 }) {
-        this.SideBar()
-        Column({ space: this.contentGap() }) {
-          if (this.panelMode === 'gender') {
-            this.GenderPanel()
-          } else if (this.panelMode === 'all') {
-            this.AllWorksPanel()
-          } else {
-            this.TagPanel()
+            this.HistoryBlock()
+            Blank()
+              .height(16)
           }
-          Blank().height(18)
+          .width('100%')
         }
-        .layoutWeight(1)
         .width('100%')
-        .padding({ left: 14, right: 14, top: 14, bottom: 24 })
+        .layoutWeight(1)
+
+        this.InputBar()
       }
       .width('100%')
-      .alignItems(VerticalAlign.Top)
+      .height('100%')
+      .constraintSize({ maxWidth: this.maxContentWidth() })
+      .padding({ left: this.horizontalInset(), right: this.horizontalInset(), top: 12, bottom: 10 })
     }
     .width('100%')
-    .backgroundColor(Theme.mobileCanvas)
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#FFFCF8')
   }
 
   @Builder
-  TopBar() {
+  TopActions() {
     Row() {
-      Text('‹')
-        .fontColor(Theme.mobileText)
-        .fontSize(this.isCompact() ? 32 : 36)
-        .fontWeight(FontWeight.Medium)
-        .width(40)
-        .textAlign(TextAlign.Start)
-        .onClick(() => goBack())
-
-      Text('分类')
-        .fontColor(Theme.mobileText)
-        .fontSize(this.headerSize())
-        .fontWeight(FontWeight.Medium)
-        .layoutWeight(1)
-        .textAlign(TextAlign.Center)
-
-      Text(this.panelMode === 'gender' ? '全部作品' : '返回分类')
-        .fontColor(Theme.mobileBlue)
-        .fontSize(this.isCompact() ? 15 : 16)
-        .fontWeight(FontWeight.Medium)
-        .width(72)
-        .textAlign(TextAlign.End)
-        .onClick(() => {
-          if (this.panelMode === 'gender') {
-            this.openAllWorks('all');
-          } else {
-            this.backToOverview();
-          }
-        })
+      this.TopIconButton('☰')
+      Blank()
+      this.TopIconButton('◷')
     }
     .width('100%')
-    .height(this.isCompact() ? 54 : 58)
-    .padding({ left: 12, right: 12, top: 6 })
+    .height(this.topButtonSize())
     .alignItems(VerticalAlign.Center)
   }
 
   @Builder
-  SideBar() {
-    Column({ space: 10 }) {
-      this.SideItem('男生', 'male', () => this.switchAudience('male'))
-      this.SideItem('女生', 'female', () => this.switchAudience('female'))
-      this.SideItem('标签', 'tags', () => this.openTagPanel())
+  TopIconButton(label: string) {
+    Stack() {
+      Text(label)
+        .fontColor('#493324')
+        .fontSize(this.isCompact() ? 24 : 26)
+        .fontWeight(FontWeight.Medium)
     }
-    .width(this.sidebarWidth())
-    .height('100%')
-    .padding({ left: 10, right: 10, top: 4, bottom: 16 })
-    .border({ width: { right: 1 }, color: '#ECEEF4' })
-    .backgroundColor('#F9FAFD')
+    .width(this.topButtonSize())
+    .height(this.topButtonSize())
+    .backgroundColor('#FFFFFF')
+    .borderRadius(this.topButtonSize() / 2)
+    .shadow({ radius: 18, color: '#12000000', offsetX: 0, offsetY: 8 })
   }
 
   @Builder
-  SideItem(label: string, area: FocusArea, action: () => void) {
-    Row() {
-      Column() {}
-        .width(4)
-        .height(26)
-        .borderRadius(2)
-        .backgroundColor(this.isSideAreaSelected(area) ? this.sideItemAccent(area) : 'transparent')
-
-      Text(label)
-        .fontColor(this.isSideAreaSelected(area) ? this.sideItemAccent(area) : Theme.mobileText)
-        .fontSize(this.isCompact() ? 15 : 16)
-        .fontWeight(this.isSideAreaSelected(area) ? FontWeight.Medium : FontWeight.Regular)
-        .margin({ left: 12 })
+  Hero() {
+    Column({ space: 12 }) {
+      this.AssistantOrb()
+      Text('你好 ✦')
+        .fontColor('#20283A')
+        .fontSize(this.titleSize())
+        .fontWeight(FontWeight.Medium)
+        .letterSpacing(0)
+      Text('我是智阅助手，有什么可以帮你？')
+        .fontColor('#858078')
+        .fontSize(this.isCompact() ? 17 : 19)
+        .lineHeight(this.isCompact() ? 24 : 27)
     }
     .width('100%')
-    .height(this.isCompact() ? 46 : 50)
-    .padding({ left: 10, right: 10 })
-    .backgroundColor(this.isSideAreaSelected(area) ? this.sideItemTone(area) : '#FFFFFF')
-    .borderRadius(14)
-    .onClick(() => action())
+    .alignItems(HorizontalAlign.Center)
+    .padding({ top: this.isCompact() ? 34 : 50, bottom: this.isCompact() ? 26 : 34 })
   }
 
   @Builder
-  GenderPanel() {
-    Column({ space: 14 }) {
+  AssistantOrb() {
+    Stack() {
+      Circle()
+        .width(74)
+        .height(74)
+        .fill('#FFFFFF')
+        .shadow({ radius: 22, color: '#18000000', offsetX: 0, offsetY: 8 })
+      Circle()
+        .width(68)
+        .height(68)
+        .fill('#FFE1C9')
+        .opacity(0.78)
+        .translate({ x: -8, y: -9 })
+      Circle()
+        .width(62)
+        .height(62)
+        .fill('#8EA0FF')
+        .opacity(0.66)
+        .translate({ x: 8, y: 11 })
+      Circle()
+        .width(48)
+        .height(48)
+        .fill('#FFFFFF')
+        .opacity(0.52)
+        .translate({ x: -18, y: -18 })
+      Text('✦')
+        .fontColor('#F2D8A4')
+        .fontSize(18)
+        .translate({ x: 48, y: -30 })
+      Text('✦')
+        .fontColor('#F2D8A4')
+        .fontSize(14)
+        .translate({ x: 44, y: 36 })
+    }
+    .width(104)
+    .height(96)
+  }
+
+  @Builder
+  PromptCard() {
+    Column({ space: 12 }) {
       Row() {
-        Text(`共 ${this.formatCount(this.currentAudienceBooks().length)}`)
-          .fontColor(Theme.mobileText)
-          .fontSize(this.isCompact() ? 16 : 18)
+        Text('你可以这样问我')
+          .fontColor('#211A16')
+          .fontSize(this.isCompact() ? 19 : 21)
+          .fontWeight(FontWeight.Medium)
+        Blank()
+        Row({ space: 6 }) {
+          Text('⟳')
+            .fontColor('#5F554C')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+          Text('换一换')
+            .fontColor('#5F554C')
+            .fontSize(14)
+        }
+        .onClick(() => this.changePromptSet())
+      }
+      .width('100%')
+
+      ForEach(this.currentPrompts(), (item: AssistantPrompt) => {
+        this.PromptRow(item)
+      }, (item: AssistantPrompt) => item.text)
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 20, bottom: 20 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(24)
+    .shadow({ radius: 26, color: '#10000000', offsetX: 0, offsetY: 12 })
+  }
+
+  @Builder
+  PromptRow(item: AssistantPrompt) {
+    Row({ space: 14 }) {
+      Stack() {
+        Text(item.icon)
+          .fontColor(item.color)
+          .fontSize(18)
           .fontWeight(FontWeight.Medium)
       }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
+      .width(42)
+      .height(42)
+      .backgroundColor(item.tint)
+      .borderRadius(21)
+      .shadow({ radius: 14, color: '#10000000', offsetX: 0, offsetY: 5 })
 
-      Grid() {
-        ForEach(this.topCategoryCards(), (card: CategoryCard) => {
-          GridItem() {
-            this.CategoryCard(card)
-          }
-        }, (card: CategoryCard) => this.categoryCardKey(card))
-      }
-      .columnsTemplate('1fr 1fr')
-      .columnsGap(12)
-      .rowsGap(12)
-      .width('100%')
+      Text(item.text)
+        .fontColor('#2D241E')
+        .fontSize(this.isCompact() ? 16 : 18)
+        .maxLines(1)
+        .layoutWeight(1)
+
+      Text('→')
+        .fontColor('#80776D')
+        .fontSize(24)
     }
     .width('100%')
+    .height(this.isCompact() ? 58 : 64)
+    .padding({ left: 10, right: 12 })
+    .backgroundColor('#FFFDF9')
+    .borderRadius(18)
+    .onClick(() => this.askAssistant(item.text))
   }
 
   @Builder
-  CategoryCard(card: CategoryCard) {
-    Row({ space: 12 }) {
-      Stack() {
-        Column() {}
-          .width('100%')
-          .height('100%')
-          .backgroundColor(card.tone)
-          .borderRadius(16)
+  ResponsePanel() {
+    Column({ space: 12 }) {
+      Row() {
+        Text(this.busy ? (this.statusText || '正在思考') : '助手回答')
+          .fontColor('#211A16')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+        Blank()
+        if (this.busy) {
+          LoadingProgress()
+            .width(18)
+            .height(18)
+            .color('#E3B36A')
+        }
+      }
+      .width('100%')
 
-        Column() {}
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#FFFFFF')
-          .opacity(0.22)
-          .translate({ x: 7, y: 7 })
-          .borderRadius(16)
+      if (this.statusText && !this.busy && !this.answer) {
+        Text(this.statusText)
+          .fontColor('#8A8177')
+          .fontSize(14)
+          .lineHeight(22)
+      }
 
-        Column() {}
-          .width('100%')
-          .height('100%')
-          .backgroundColor(card.accent)
-          .opacity(0.08)
-          .translate({ x: 3, y: 3 })
-          .borderRadius(16)
+      if (this.answer) {
+        Text(this.answer)
+          .fontColor('#4F4842')
+          .fontSize(14)
+          .lineHeight(22)
+          .maxLines(6)
+      }
 
-        Row({ space: 10 }) {
-          if (card.sampleBook) {
-            BookCover({
-              bookId: card.sampleBook.id,
-              title: card.sampleBook.title,
-              difficulty: card.sampleBook.difficulty,
-              coverColor: card.sampleBook.coverColor,
-              widthValue: this.isCompact() ? 42 : 48,
-              heightValue: this.isCompact() ? 58 : 66,
-              titleSize: 8,
-            })
-          } else {
-            Blank()
-              .width(this.isCompact() ? 42 : 48)
-              .height(this.isCompact() ? 58 : 66)
-              .backgroundColor('#FFFFFF')
-              .borderRadius(10)
-          }
-
-          Column({ space: 5 }) {
-            Text(card.title)
-              .fontColor(Theme.mobileText)
-              .fontSize(this.isCompact() ? 16 : 18)
-              .fontWeight(FontWeight.Medium)
-              .maxLines(1)
-            Text(this.formatCount(card.count))
-              .fontColor(card.accent)
-              .fontSize(this.isCompact() ? 13 : 14)
-              .fontWeight(FontWeight.Medium)
-            Text(card.summary)
-              .fontColor(Theme.mobileSubtext)
-              .fontSize(this.isCompact() ? 11 : 12)
-              .lineHeight(this.isCompact() ? 16 : 17)
-              .maxLines(2)
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
+      if (this.recommendedBooks.length > 0) {
+        Column({ space: 8 }) {
+          ForEach(this.recommendedBooks.slice(0, 3), (rec: RecommendationBook, index: number) => {
+            this.RecommendationRow(rec, index)
+          }, (rec: RecommendationBook, index: number) => `${rec.id}-${rec.title}-${index}`)
         }
         .width('100%')
-        .height('100%')
-        .padding({ left: 12, right: 12, top: 12, bottom: 12 })
       }
-      .width('100%')
-      .height(this.isCompact() ? 148 : 158)
-      .borderRadius(16)
-      .shadow({ radius: 10, color: '#12000000', offsetX: 0, offsetY: 4 })
-      .onClick(() => this.openCategory(card.key))
-    }
-    .width('100%')
-  }
 
-  @Builder
-  AllWorksPanel() {
-    Column({ space: 14 }) {
-      Row() {
-        Column({ space: 4 }) {
-          Text(this.audienceTitle())
-            .fontColor(Theme.mobileText)
-            .fontSize(this.isCompact() ? 20 : 22)
-            .fontWeight(FontWeight.Bold)
-          Text(`共 ${this.formatCount(this.audienceBooksFiltered().length)}`)
-            .fontColor(Theme.mobileSubtext)
-            .fontSize(13)
-        }
-        .alignItems(HorizontalAlign.Start)
-        Blank()
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Bottom)
-
-      Row({ space: 8 }) {
-        this.CategoryFilterTab('全部', 'all', () => this.selectCategoryTab('all'))
-        ForEach(this.categoryTabs(), (group: SubjectGroup) => {
-          this.CategoryFilterTab(group.title, group.key, () => this.selectCategoryTab(group.key))
-        }, (group: SubjectGroup) => this.categoryTabKey(group))
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Bottom)
-
-      Row({ space: 8 }) {
-        Image($r('app.media.mobile_filter'))
-          .width(16)
-          .height(16)
-        Text(this.selectedTagFilter ? `标签精筛 · ${this.selectedTagFilter}` : '标签精筛')
-          .fontColor(Theme.mobileSubtext)
+      if (this.followUp) {
+        Text(this.followUp)
+          .fontColor('#B88A45')
           .fontSize(13)
-      }
-      .width('100%')
-      .height(40)
-      .padding({ left: 16, right: 16 })
-      .backgroundColor('#F3F4F8')
-      .borderRadius(20)
-
-      Column({ space: 0 }) {
-        if (this.audienceBooksFiltered().length === 0) {
-          this.EmptyState()
-        } else {
-          ForEach(this.audienceBooksFiltered(), (book: Book) => {
-            this.BookListCard(book)
-          }, (book: Book) => `${book.id}_${book.title}`)
-        }
-      }
-      .width('100%')
-    }
-    .width('100%')
-  }
-
-  @Builder
-  CategoryFilterTab(label: string, categoryKey: string, action: () => void) {
-    Column({ space: 6 }) {
-      Text(label)
-        .fontColor(this.isCategoryTabSelected(categoryKey) ? Theme.mobileText : Theme.mobileSubtext)
-        .fontSize(this.isCompact() ? 13 : 14)
-        .fontWeight(this.isCategoryTabSelected(categoryKey) ? FontWeight.Medium : FontWeight.Regular)
-        .maxLines(1)
-      Row() {}
-        .width(this.isCategoryTabSelected(categoryKey) ? 22 : 0)
-        .height(3)
-        .borderRadius(2)
-        .backgroundColor(this.isCategoryTabSelected(categoryKey) ? this.currentAudienceOption().accent : 'transparent')
-    }
-    .padding({ left: 2, right: 2, top: 6, bottom: 6 })
-    .onClick(() => action())
-  }
-
-  @Builder
-  EmptyState() {
-    Column({ space: 8 }) {
-      Text('这一组还没有书')
-        .fontColor(Theme.mobileText)
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-      Text('可以先切换分类，或者换一个标签看看。')
-        .fontColor(Theme.mobileSubtext)
-        .fontSize(13)
-        .lineHeight(18)
-        .textAlign(TextAlign.Center)
-    }
-    .width('100%')
-    .padding({ top: 32, bottom: 24 })
-    .alignItems(HorizontalAlign.Center)
-  }
-
-  @Builder
-  BookListCard(book: Book) {
-    Row({ space: 12 }) {
-      BookCover({
-        bookId: book.id,
-        title: book.title,
-        difficulty: book.difficulty,
-        coverColor: book.coverColor || '#D9E1F5',
-        widthValue: this.isCompact() ? 66 : 74,
-        heightValue: this.isCompact() ? 92 : 104,
-        titleSize: 11,
-      })
-
-      Column({ space: 6 }) {
-        Text(book.title || '未命名图书')
-          .fontColor(Theme.mobileText)
-          .fontSize(this.isCompact() ? 16 : 18)
-          .fontWeight(FontWeight.Medium)
-          .lineHeight(this.isCompact() ? 22 : 24)
+          .lineHeight(20)
           .maxLines(2)
+      }
 
-        Text(`${book.author || '作者待补充'} · ${this.primaryTag(book.tags) || book.difficulty || '云端图书'}`)
-          .fontColor(Theme.mobileSubtext)
+      if (this.sources.length > 0) {
+        Text(`参考依据 ${this.sources.length} 条`)
+          .fontColor('#989187')
           .fontSize(12)
-          .maxLines(1)
+      }
+    }
+    .width('100%')
+    .padding(18)
+    .margin({ top: 16 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(22)
+    .shadow({ radius: 20, color: '#0E000000', offsetX: 0, offsetY: 8 })
+  }
 
-        Text(book.summary || '暂无简介')
-          .fontColor(Theme.mobileSubtext)
-          .fontSize(13)
+  @Builder
+  RecommendationRow(rec: RecommendationBook, index: number) {
+    Row({ space: 10 }) {
+      Text(`${index + 1}`)
+        .fontColor('#FFFFFF')
+        .fontSize(12)
+        .fontWeight(FontWeight.Bold)
+        .textAlign(TextAlign.Center)
+        .width(24)
+        .height(24)
+        .backgroundColor('#E1B86D')
+        .borderRadius(12)
+
+      Column({ space: 3 }) {
+        Text(rec.title)
+          .fontColor('#2D241E')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .maxLines(1)
+        Text(rec.reason || rec.author || rec.difficulty || '来自后端智能推荐')
+          .fontColor('#8A8177')
+          .fontSize(12)
           .lineHeight(18)
           .maxLines(2)
-
-        Row({ space: 8 }) {
-          Text(this.currentAudienceLabel())
-            .fontColor(this.currentAudienceOption().accent)
-            .fontSize(11)
-            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-            .backgroundColor(this.currentAudienceOption().soft)
-            .borderRadius(10)
-          if (book.difficulty) {
-            Text(book.difficulty)
-              .fontColor(Theme.mobileSubtext)
-              .fontSize(11)
-              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-              .backgroundColor('#F3F5F8')
-              .borderRadius(10)
-          }
-        }
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding({ top: 12, bottom: 12 })
-    .border({ width: { bottom: 1 }, color: '#EEF1F5' })
-    .onClick(() => this.openBook(book))
+    .padding(12)
+    .backgroundColor('#FFFDF8')
+    .borderRadius(16)
+    .onClick(() => {
+      if (this.canOpenRecommendation(rec)) {
+        openBookDetail(rec.id);
+      }
+    })
   }
 
   @Builder
-  TagPanel() {
-    Column({ space: 14 }) {
-      Row({ space: 18 }) {
-        this.TagAudienceTab('男生标签', 'male', () => this.switchTagAudience('male'))
-        this.TagAudienceTab('女生标签', 'female', () => this.switchTagAudience('female'))
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Bottom)
-
-      Column({ space: 10 }) {
-        Row() {
-          Text('热门标签')
-            .fontColor(Theme.mobileText)
-            .fontSize(18)
+  HistoryBlock() {
+    Column({ space: 12 }) {
+      Row() {
+        Row({ space: 7 }) {
+          Text('◷')
+            .fontColor('#827B73')
+            .fontSize(17)
+          Text('历史对话')
+            .fontColor('#716A63')
+            .fontSize(17)
             .fontWeight(FontWeight.Medium)
-          Blank()
         }
-        .width('100%')
-
-        Grid() {
-          ForEach(this.hotTags(), (tag: TagCard) => {
-            GridItem() {
-              this.TagSquare(tag, true)
-            }
-          }, (tag: TagCard) => this.tagCardKey(tag))
-        }
-        .columnsTemplate('1fr 1fr')
-        .columnsGap(12)
-        .rowsGap(12)
-        .width('100%')
-      }
-
-      Column({ space: 10 }) {
-        Row() {
-          Text(`全部标签 ${this.tagCards().length}`)
-            .fontColor(Theme.mobileText)
-            .fontSize(18)
-            .fontWeight(FontWeight.Medium)
-          Blank()
-        }
-        .width('100%')
-
-        Grid() {
-          ForEach(this.otherTags(), (tag: TagCard) => {
-            GridItem() {
-              this.TagSquare(tag, false)
-            }
-          }, (tag: TagCard) => this.tagCardKey(tag))
-        }
-        .columnsTemplate(this.pageWidth >= 720 ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr')
-        .columnsGap(12)
-        .rowsGap(12)
-        .width('100%')
-      }
-    }
-    .width('100%')
-  }
-
-  @Builder
-  TagAudienceTab(label: string, audience: AudienceKey, action: () => void) {
-    Column({ space: 6 }) {
-      Text(label)
-        .fontColor(this.isTagAudienceSelected(audience) ? Theme.mobileText : Theme.mobileSubtext)
-        .fontSize(this.isCompact() ? 17 : 18)
-        .fontWeight(this.isTagAudienceSelected(audience) ? FontWeight.Bold : FontWeight.Medium)
-      Row() {}
-        .width(this.isTagAudienceSelected(audience) ? 36 : 0)
-        .height(4)
-        .borderRadius(2)
-        .backgroundColor(this.isTagAudienceSelected(audience) ? this.tagAudienceAccent(audience) : 'transparent')
-    }
-    .padding({ top: 4, bottom: 4 })
-    .onClick(() => action())
-  }
-
-  @Builder
-  TagSquare(tag: TagCard, featured: boolean) {
-    Stack() {
-      Column() {}
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#FFFFFF')
-        .borderRadius(18)
-        .opacity(0.55)
-        .translate({ x: 8, y: 8 })
-
-      Column() {}
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#FFFFFF')
-        .borderRadius(18)
-        .opacity(0.72)
-        .translate({ x: 4, y: 4 })
-
-      Column({ space: 6 }) {
-        Text(tag.tag)
-          .fontColor(Theme.mobileText)
-          .fontSize(featured ? 18 : 16)
-          .fontWeight(FontWeight.Medium)
-          .maxLines(1)
-
-        Text(this.formatCount(tag.count))
-          .fontColor(tag.accent)
-          .fontSize(featured ? 13 : 12)
-          .fontWeight(FontWeight.Medium)
-
-        Text(tag.sampleBook ? tag.sampleBook.title : ' ')
-          .fontColor(Theme.mobileSubtext)
-          .fontSize(11)
-          .lineHeight(16)
-          .maxLines(2)
-
         Blank()
-
-        Row() {
-          Blank()
-          if (tag.sampleBook) {
-            BookCover({
-              bookId: tag.sampleBook.id,
-              title: tag.sampleBook.title,
-              difficulty: tag.sampleBook.difficulty,
-              coverColor: tag.sampleBook.coverColor || '#D9E1F5',
-              widthValue: featured ? 54 : 46,
-              heightValue: featured ? 72 : 62,
-              titleSize: 8,
-            })
-          }
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Bottom)
+        Text('查看全部 ›')
+          .fontColor('#827B73')
+          .fontSize(15)
       }
       .width('100%')
-      .height('100%')
-      .padding(14)
-      .backgroundColor(tag.tone)
-      .borderRadius(18)
-      .shadow({ radius: 10, color: '#12000000', offsetX: 0, offsetY: 4 })
+
+      if (this.historyBusy) {
+        this.HistoryPlaceholder('正在同步历史对话')
+      } else if (this.historyError) {
+        this.HistoryPlaceholder(this.historyError)
+      } else if (this.recentChats.length === 0) {
+        this.HistoryPlaceholder(this.loggedIn() ? '暂无历史对话' : '登录后显示真实问答历史')
+      } else {
+        ForEach(this.recentChats, (item: ChatRecord) => {
+          this.HistoryRow(item)
+        }, (item: ChatRecord) => `${item.id}-${item.createdAt}`)
+      }
     }
     .width('100%')
-    .aspectRatio(1)
-    .onClick(() => this.selectTag(tag.tag))
+    .margin({ top: 24 })
   }
 
   @Builder
-  StatusBanner(text: string, color: string) {
+  HistoryPlaceholder(text: string) {
     Text(text)
-      .fontColor('#FFFFFF')
-      .fontSize(13)
-      .lineHeight(18)
-      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-      .backgroundColor(color)
+      .fontColor('#A79F96')
+      .fontSize(14)
       .width('100%')
+      .height(48)
+      .padding({ left: 18, right: 18 })
+      .backgroundColor('#FFFDF9')
+      .borderRadius(18)
+  }
+
+  @Builder
+  HistoryRow(item: ChatRecord) {
+    Row() {
+      Text(item.question || '未命名对话')
+        .fontColor('#6A625B')
+        .fontSize(this.isCompact() ? 15 : 16)
+        .maxLines(1)
+        .layoutWeight(1)
+      Text(this.historyTime(item.createdAt))
+        .fontColor('#B4ADA6')
+        .fontSize(13)
+        .margin({ left: 12 })
+    }
+    .width('100%')
+    .height(this.isCompact() ? 50 : 56)
+    .padding({ left: 18, right: 18 })
+    .backgroundColor('#FFFDF9')
+    .borderRadius(18)
+    .onClick(() => {
+      this.query = item.question || '';
+    })
+  }
+
+  @Builder
+  InputBar() {
+    Row({ space: 12 }) {
+      TextInput({ placeholder: '输入你的问题...', text: this.query })
+        .layoutWeight(1)
+        .height(56)
+        .fontColor('#2D241E')
+        .placeholderColor('#B7B1AA')
+        .fontSize(this.isCompact() ? 16 : 18)
+        .backgroundColor('transparent')
+        .border({ width: 0 })
+        .onChange((value: string) => {
+          this.query = value;
+        })
+        .onSubmit(() => {
+          this.askAssistant();
+        })
+
+      Stack() {
+        Text('⋮')
+          .fontColor('#5D554E')
+          .fontSize(22)
+          .rotate({ angle: 90 })
+      }
+      .width(40)
+      .height(40)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#D8D5D0' })
+      .borderRadius(20)
+
+      Stack() {
+        if (this.busy) {
+          LoadingProgress()
+            .width(18)
+            .height(18)
+            .color('#FFFFFF')
+        } else {
+          Text('↑')
+            .fontColor('#FFFFFF')
+            .fontSize(26)
+            .fontWeight(FontWeight.Bold)
+        }
+      }
+      .width(44)
+      .height(44)
+      .backgroundColor(this.busy ? '#D7C2A0' : '#E0B66F')
+      .borderRadius(22)
+      .onClick(() => {
+        this.askAssistant();
+      })
+    }
+    .width('100%')
+    .height(this.isCompact() ? 72 : 78)
+    .padding({ left: 18, right: 16 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(24)
+    .shadow({ radius: 24, color: '#12000000', offsetX: 0, offsetY: 10 })
   }
 }
